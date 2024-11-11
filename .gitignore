@@ -1,0 +1,10 @@
+*.pem
+/.idea
+legal_acts/**
+summit-demo/
+/legal_acts
+/aws-mwaa-local-runner
+.env
+/api-sejm-facade
+/preprocessing/lines
+/preprocessing/pdfs

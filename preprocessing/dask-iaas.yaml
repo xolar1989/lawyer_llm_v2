@@ -1,0 +1,552 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  TaskDefinitionWorkerName:
+    Type: String
+    Default: dask-worker
+  ServiceSchedulerName:
+    Type: String
+    Default: dask-scheduler
+  PrivateNameSpaceName:
+    Type: String
+    Default: internal
+  WorkersServiceName:
+    Type: String
+    Description: Name of the ECS cluster(it will be defined during dag start)
+#    Default: Dask-Workers
+  ECSClusterName:
+    Type: String
+    Description: Name of the ECS cluster(it will be defined during dag start)
+  FlowRunId:
+    Type: String
+    Description: Flow run id from Prefect (it will be defined during dag start)
+  FlowRunName:
+    Type: String
+    Description: Flow run name from Prefect (it will be defined during dag start)
+  EnableScaling:
+    Type: String
+    Description: Enable auto-scaling for the Dask workers (true/false)
+    AllowedValues: [ "true", "false" ]
+  MemoryCapacity:
+    Type: Number
+    Description: Memory capacity for the Dask worker tasks.
+#    Default: 4096
+  CpuCapacity:
+    Type: Number
+    Description: CPU capacity for the Dask worker tasks.
+
+  MinWorkerCapacity:
+    Type: Number
+    Description: Minimum number of Dask worker tasks.
+    Default: 1
+
+  MaxWorkerCapacity:
+    Type: Number
+    Description: Maximum number of Dask worker tasks.
+    Default: 10
+
+#    Default: Fargate-Dask-Cluster
+Conditions:
+  CreateDaskWorkerScalableTarget: !Equals [!Ref EnableScaling, "true"]
+
+Resources:
+  DaskSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Security group for Dask cluster"
+      VpcId: !ImportValue NetworkingStack:VPC
+      SecurityGroupIngress:
+        - IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
+
+  ECSExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 'ecs-tasks.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: ECSExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ec2:AuthorizeSecurityGroupIngress'
+                  - "ec2:CreateSecurityGroup"
+                  - "ec2:CreateTags"
+                  - "ec2:DescribeNetworkInterfaces"
+                  - "ec2:DescribeSecurityGroups"
+                  - "ec2:DescribeSubnets"
+                  - "ec2:DescribeVpcs"
+                  - "ec2:DeleteSecurityGroup"
+                  - "ecs:CreateCluster"
+                  - "ecs:DescribeTasks"
+                  - "ecs:ListAccountSettings"
+                  - "ecs:RegisterTaskDefinition"
+                  - "ecs:RunTask"
+                  - "ecs:StopTask"
+                  - "ecs:ListClusters"
+                  - "ecs:DescribeClusters"
+                  - "ecs:DeleteCluster"
+                  - "ecs:ListTaskDefinitions"
+                  - "ecs:DescribeTaskDefinition"
+                  - "ecs:DeregisterTaskDefinition"
+                  - "iam:AttachRolePolicy"
+                  - "iam:CreateRole"
+                  - "iam:TagRole"
+                  - "iam:PassRole"
+                  - "iam:DeleteRole"
+                  - "iam:ListRoles"
+                  - "iam:ListRoleTags"
+                  - "iam:ListAttachedRolePolicies"
+                  - "iam:DetachRolePolicy"
+                  - "logs:*"
+                  - "ecr:*"
+                  - "elasticloadbalancing:*"
+                  - "s3:*"
+                  - "secretsmanager:*"
+                Resource: '*'
+
+  LogsGroupScheduler:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Sub /ecs/dask-scheduler/${ECSClusterName}/${FlowRunId}
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: !Ref FlowRunId
+
+  LogsGroupWorkers:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Sub /ecs/dask-workers/${ECSClusterName}/${FlowRunId}
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: !Ref FlowRunId
+
+  PrivateNameSpace:
+    Type: 'AWS::ServiceDiscovery::PrivateDnsNamespace'
+    Properties:
+      Vpc: !ImportValue NetworkingStack:VPC
+      Name: !Sub internal-${FlowRunId} # HERE I create namespace used in TaskDefinitionWorker, remember that it reference to the same namespace
+
+  DaskCluster:
+    Type: 'AWS::ECS::Cluster'
+    Properties:
+      ClusterName: !Ref ECSClusterName
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 1
+
+  ServiceRegistryScheduler:
+    Type: 'AWS::ServiceDiscovery::Service'
+    DependsOn: PrivateNameSpace
+    Properties:
+      Name: !Ref ServiceSchedulerName   # Here is the name which inside container worker reference to
+      NamespaceId: !Ref PrivateNameSpace
+      HealthCheckCustomConfig:
+        FailureThreshold: 10
+      DnsConfig:
+        DnsRecords:
+          - Type: A
+            TTL: '60'
+
+
+  ServiceRegistryWorker:
+    Type: 'AWS::ServiceDiscovery::Service'
+    DependsOn: PrivateNameSpace
+    Properties:
+      Name: dask-worker
+      NamespaceId: !Ref PrivateNameSpace
+      HealthCheckCustomConfig:
+        FailureThreshold: 10
+      DnsConfig:
+        DnsRecords:
+          - Type: A
+            TTL: '60'
+
+  DaskDefinition:
+    Type: 'AWS::ECS::TaskDefinition'
+    DependsOn:
+      - ServiceRegistryScheduler
+
+    Properties:
+      Family: dask-scheduler
+      Cpu: !Ref CpuCapacity
+      Memory: !Ref MemoryCapacity
+      NetworkMode: awsvpc
+      TaskRoleArn: !Ref ECSExecutionRole
+      ExecutionRoleArn: !Ref ECSExecutionRole
+      RequiresCompatibilities:
+        - FARGATE
+      ContainerDefinitions:
+        - Name: dask-scheduler
+          Image: '767427092061.dkr.ecr.eu-west-1.amazonaws.com/dask-image:latest'
+          Cpu: !Ref CpuCapacity
+          Memory: !Ref MemoryCapacity
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub /ecs/dask-scheduler/${ECSClusterName}/${FlowRunId}
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: ecs
+          Essential: 'true'
+          # Add a small change to trigger a new task definition revision
+          Environment:
+            - Name: FORCE_DEPLOYMENT
+              Value: 'v1'  # TODO change this when you want to trigger a new deployment
+          Command: ["dask-scheduler"]
+          PortMappings: # Add this block to expose port 8786
+            - ContainerPort: 8786  # Port in the container
+              HostPort: 8786  # Port on the host (Fargate)
+              Protocol: tcp
+            - ContainerPort: 8787  # Port in the container
+              HostPort: 8787  # Port on the host (Fargate)
+              Protocol: HTTP
+
+  TaskDefinitionWorker:
+    Type: 'AWS::ECS::TaskDefinition'
+    DependsOn:
+      - DaskSchedulerService
+      - ServiceRegistryWorker
+    Properties:
+      Family: dask-worker
+      Cpu: !Ref CpuCapacity
+      Memory: !Ref MemoryCapacity
+      NetworkMode: awsvpc
+      TaskRoleArn: !Ref ECSExecutionRole
+      ExecutionRoleArn: !Ref ECSExecutionRole
+      RequiresCompatibilities:
+        - FARGATE
+      ContainerDefinitions:
+        - Name: dask-worker
+          Image: '767427092061.dkr.ecr.eu-west-1.amazonaws.com/dask-image:latest'
+          Cpu: !Ref CpuCapacity
+          Memory: !Ref MemoryCapacity
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Sub /ecs/dask-workers/${ECSClusterName}/${FlowRunId}
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: ecs
+          Essential: 'true'
+          # Add a small change to trigger a new task definition revision
+          Environment:
+            - Name: FORCE_DEPLOYMENT
+              Value: 'v1'  # TODO change this when you want to trigger a new deployment
+          Command:
+            - dask-worker
+            - !Sub 'tcp://${ServiceSchedulerName}.internal-${FlowRunId}:8786'
+
+
+  DaskSchedulerService:
+    Type: 'AWS::ECS::Service'
+    DependsOn:
+      - ServiceRegistryScheduler
+      - LogsGroupScheduler
+      - DaskLoadBalancerTCP
+      - DaskLoadBalancerHTTP
+      - DaskSchedulerTCPTargetGroup
+      - DaskSchedulerDashboardHTTPTargetGroup
+      - DaskLoadBalancerListenerTCP
+      - DaskLoadBalancerListenerDashboardHTTP  # Ensure the listeners are ready
+    Properties:
+      Cluster: !Ref DaskCluster
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      DesiredCount: 1
+      LaunchType: FARGATE
+      ServiceName: !Ref ServiceSchedulerName
+      ServiceRegistries:
+        - RegistryArn: !GetAtt ServiceRegistryScheduler.Arn
+      TaskDefinition: !Ref DaskDefinition
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref DaskSecurityGroup
+          Subnets:
+            - !ImportValue NetworkingStack:PublicSubnet1
+            - !ImportValue NetworkingStack:PublicSubnet2
+      LoadBalancers:
+        - ContainerName: dask-scheduler # Container running in ECS task
+          ContainerPort: 8786  # Port in the container that the scheduler listens on
+          TargetGroupArn: !Ref DaskSchedulerTCPTargetGroup
+        - ContainerName: dask-scheduler  # Container running in ECS task
+          ContainerPort: 8787  # Port in the container that the scheduler listens on
+          TargetGroupArn: !Ref DaskSchedulerDashboardHTTPTargetGroup
+
+
+  DaskWorkerService:
+    Type: 'AWS::ECS::Service'
+    DependsOn:
+      - ServiceRegistryWorker
+      - LogsGroupWorkers
+    Properties:
+      Cluster: !Ref DaskCluster
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      LaunchType: FARGATE
+      ServiceName: !Ref WorkersServiceName
+      ServiceRegistries:
+        - RegistryArn: !GetAtt ServiceRegistryWorker.Arn
+      TaskDefinition: !Ref TaskDefinitionWorker
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref DaskSecurityGroup
+          Subnets:
+            - !ImportValue NetworkingStack:PublicSubnet1
+            - !ImportValue NetworkingStack:PublicSubnet2
+
+
+  DaskWorkerScalableTarget:
+    Type: 'AWS::ApplicationAutoScaling::ScalableTarget'
+    Condition: CreateDaskWorkerScalableTarget
+    DependsOn: DaskWorkerService
+    Properties:
+      MaxCapacity: 10
+      MinCapacity: 1
+      ResourceId: !Sub 'service/${ECSClusterName}/${WorkersServiceName}'
+      RoleARN: !GetAtt ECSAutoScalingRole.Arn
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  DaskWorkerScalingPolicyCPU:
+    Type: 'AWS::ApplicationAutoScaling::ScalingPolicy'
+    Condition: CreateDaskWorkerScalableTarget
+    Properties:
+      PolicyName: DaskWorkerScalingPolicyCPU
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref DaskWorkerScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: 50.0  # Target CPU utilization for scaling
+        ScaleInCooldown: 40  # Cooldown period before scaling in (in seconds)
+        ScaleOutCooldown: 40  # Cooldown period before scaling out (in seconds)
+
+  DaskWorkerScalingPolicyMemory:
+    Type: 'AWS::ApplicationAutoScaling::ScalingPolicy'
+    Condition: CreateDaskWorkerScalableTarget
+    Properties:
+      PolicyName: DaskWorkerScalingPolicyMemory
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref DaskWorkerScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageMemoryUtilization
+        TargetValue: 70.0  # Target Memory utilization for scaling
+        ScaleInCooldown: 40
+        ScaleOutCooldown: 40
+
+  ECSAutoScalingRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: application-autoscaling.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: ECSAutoScalingPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:UpdateService
+                  - ecs:DescribeServices
+                  - cloudwatch:*
+                  - application-autoscaling:*
+                  - sns:*
+                Resource: '*'
+
+  DaskLoadBalancerTCP:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      Name: !Sub ${FlowRunName}-TCP
+      Scheme: internet-facing  # Public load balancer
+      Type: network  # This defines that it's a Network Load Balancer (NLB)
+      Subnets:
+        - !ImportValue NetworkingStack:PublicSubnet1
+        - !ImportValue NetworkingStack:PublicSubnet2
+      SecurityGroups:
+        - !Ref DaskSecurityGroup
+
+  DaskLoadBalancerHTTP:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      Name: !Sub ${FlowRunName}-HTTP
+      Scheme: internet-facing  # Public load balancer
+      Type: application  # This defines that it's an Application Load Balancer (ALB)
+      Subnets:
+        - !ImportValue NetworkingStack:PublicSubnet1
+        - !ImportValue NetworkingStack:PublicSubnet2
+      SecurityGroups:
+        - !Ref DaskSecurityGroup
+
+  DaskSchedulerTCPTargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      Protocol: TCP
+      VpcId: !ImportValue NetworkingStack:VPC
+      Port: 8786  # Dask Scheduler port
+      TargetType: ip  # Use 'ip' for Fargate tasks
+
+  DaskSchedulerDashboardHTTPTargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      Protocol: HTTP
+      Port: 8787  # Dask Scheduler dashboard port
+      VpcId: !ImportValue NetworkingStack:VPC
+      TargetType: ip  # Use 'ip' for Fargate tasks
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: "/"  # Check if this path works, or change to a non-redirect path
+      HealthCheckPort: 8787
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: "200-301"  # Accept only successful HTTP status codes
+
+  DaskLoadBalancerListenerTCP:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref DaskSchedulerTCPTargetGroup
+      LoadBalancerArn: !Ref DaskLoadBalancerTCP
+      Port: 8786  # Dask Scheduler port
+      Protocol: TCP  # Ensure protocol is TCP to match the target group
+
+  DaskLoadBalancerListenerDashboardHTTP:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref DaskSchedulerDashboardHTTPTargetGroup
+      LoadBalancerArn: !Ref DaskLoadBalancerHTTP
+      Port: 8787  # Dask Scheduler dashboard port
+      Protocol: HTTP  # Ensure protocol is HTTP to match the target group
+
+#  DaskLoadBalancerListenerRule:
+#    Type: 'AWS::ElasticLoadBalancingV2::ListenerRule'
+#    Properties:
+#      Actions:
+#        - Type: forward
+#          TargetGroupArn: !Ref DaskTargetGroup
+#      Conditions:
+#        - Field: path-pattern
+#          Values: ['/']
+#      ListenerArn: !Ref DaskLoadBalancerListener
+#      Priority: 1
+
+Outputs:
+  DaskCluster:
+    Description: 'Dask Cluster'
+    Value: !Ref DaskCluster
+    Export:
+      Name: !Sub DaskStack:${ECSClusterName}:${FlowRunId}:DaskCluster
+  WorkersServiceName:
+    Description: 'Workers Service Name'
+    Value: !Ref WorkersServiceName
+    Export:
+      Name: !Sub DaskStack:${ECSClusterName}:${FlowRunId}:WorkersServiceName
+  TaskDefinitionWorkerName:
+    Description: 'Task Definition Worker Name'
+    Value: !Ref TaskDefinitionWorkerName
+    Export:
+      Name: !Sub DaskStack:${ECSClusterName}:${FlowRunId}:TaskDefinitionWorkerName
+  DaskClientURLForSagamaker:
+    Description: 'Dask Client URL'
+    Value: !Sub '${ServiceSchedulerName}.${PrivateNameSpaceName}:8786'
+    Export:
+      Name: !Sub DaskStack:${ECSClusterName}:${FlowRunId}:DaskClientURL
+  DaskSchedulerService:
+    Description: 'Dask Scheduler Service'
+    Value: !Ref DaskSchedulerService
+    Export:
+      Name: !Sub DaskStack:${ECSClusterName}:${FlowRunId}:DaskSchedulerService
+  DaskWorkerService:
+    Description: 'Dask Worker Service'
+    Value: !Ref DaskWorkerService
+    Export:
+      Name: !Sub DaskStack:${ECSClusterName}:${FlowRunId}:DaskWorkerService
+  DaskSecurityGroup:
+    Description: 'Dask Security Group'
+    Value: !Ref DaskSecurityGroup
+    Export:
+      Name: !Sub DaskStack:${ECSClusterName}:${FlowRunId}:DaskSecurityGroup
+  PrivateNameSpace:
+    Description: 'Private Name Space'
+    Value: !Ref PrivateNameSpace
+    Export:
+      Name: !Sub DaskStack:${ECSClusterName}:${FlowRunId}:PrivateNameSpace
+  LogsGroupScheduler:
+    Description: 'Logs Group Scheduler'
+    Value: !Ref LogsGroupScheduler
+    Export:
+      Name: !Sub DaskStack:${ECSClusterName}:${FlowRunId}:LogsGroupScheduler
+  LogsGroupWorkers:
+    Description: 'Logs Group Workers'
+    Value: !Ref LogsGroupWorkers
+    Export:
+      Name: !Sub DaskStack:${ECSClusterName}:${FlowRunId}:LogsGroupWorkers
+  DaskDefinition:
+    Description: 'Dask Definition'
+    Value: !Ref DaskDefinition
+    Export:
+      Name: !Sub DaskStack:${ECSClusterName}:${FlowRunId}:DaskDefinition
+  TaskDefinitionWorker:
+    Description: 'Task Definition Worker'
+    Value: !Ref TaskDefinitionWorker
+    Export:
+      Name: !Sub DaskStack:${ECSClusterName}:${FlowRunId}:TaskDefinitionWorker
+  ServiceRegistryScheduler:
+    Description: 'Service Registry Scheduler'
+    Value: !Ref ServiceRegistryScheduler
+    Export:
+      Name: !Sub DaskStack:${ECSClusterName}:${FlowRunId}:ServiceRegistryScheduler
+  ServiceRegistryWorker:
+    Description: 'Service Registry Worker'
+    Value: !Ref ServiceRegistryWorker
+    Export:
+      Name: !Sub DaskStack:${ECSClusterName}:${FlowRunId}:ServiceRegistryWorker
+  DaskLoadBalancerTCP:
+    Description: 'Dask Load Balancer'
+    Value: !Ref DaskLoadBalancerTCP
+    Export:
+      Name: !Sub DaskStack:${ECSClusterName}:${FlowRunId}:DaskLoadBalancerTCP
+  DaskLoadBalancerHTTP:
+    Description: 'Dask Load Balancer HTTP'
+    Value: !Ref DaskLoadBalancerHTTP
+    Export:
+      Name: !Sub DaskStack:${ECSClusterName}:${FlowRunId}:DaskLoadBalancerHTTP
+  DaskSchedulerALBURL:
+    Description: "The URL to connect to the Dask Scheduler via the Application Load Balancer"
+    Value: !Sub '${DaskLoadBalancerTCP.DNSName}:8786'
+    Export:
+      Name: !Sub DaskStack:${ECSClusterName}:${FlowRunId}:DaskSchedulerURL
+

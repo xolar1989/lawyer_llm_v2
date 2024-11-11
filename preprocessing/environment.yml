@@ -1,0 +1,37 @@
+name: dask-env2
+channels:
+  - defaults
+  - conda-forge
+channel_priority: strict
+dependencies:
+  - python=3.8.13
+  - dask[complete]=2022.10.0
+  - distributed=2022.10.0
+  - s3fs=2022.10.0
+  - cloudpickle=2.2.0
+  - lz4=4.0.0
+  - msgpack-python=1.0.4
+  - numpy=1.24.1
+  - toolz=0.12.0
+  - tornado=6.1
+  - boto3
+  - pyarrow
+  - pymongo
+  - PyPDF2
+  - pdfplumber
+  - pycryptodome
+  - requests=2.32.3
+  - prefect=2.20.0
+  - matplotlib
+  - pip
+  - pip:
+      - backoff
+      - opencv-python
+      - pdf2image
+      - spire-pdf
+      - langchain==0.2.9
+      - langchain-openai==0.1.19
+      - openai==1.37.1
+      - prefect[dask]==2.20.0  # Install preprocessing[dask] using pip
+      - tqdm
+
