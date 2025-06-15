@@ -18,7 +18,13 @@ class Datalake:
     def __init__(self, datalake_bucket: str, aws_region: str = 'eu-west-1'):
         self.datalake_bucket = datalake_bucket
         self.aws_region = aws_region
-        self.s3_client = boto3.client('s3', region_name=aws_region)
+        self._s3_client = None
+
+    @property
+    def s3_client(self):
+        if self.s3_client is None:
+            self._s3_client = boto3.client('s3', region_name=self.aws_region)
+        return self._s3_client
 
     def save_to_datalake_parquet(self, result_ddf: DataFrame, flow_information: Dict[str, str], stage_type: Type,
                                  result_name: str = 'results') -> str:
@@ -43,7 +49,12 @@ class Datalake:
         return ddf_from_parquet
 
     def read_from_datalake_pdf(self, key: str):
-        return io.BytesIO(self.s3_client.get_object(Bucket=self.datalake_bucket, Key=key)['Body'].read())
+        with self.s3_client.get_object(Bucket=self.datalake_bucket, Key=key) as response:
+            pdf_content = io.BytesIO()
+            for chunk in response['Body'].iter_chunks(chunk_size=1024 * 1024):  # 1 MB chunks
+                pdf_content.write(chunk)
+            pdf_content.seek(0)  # Reset pointer to start
+        return pdf_content
 
     def save_to_datalake_pdf(self, **kwargs):
         if 'response' in kwargs:

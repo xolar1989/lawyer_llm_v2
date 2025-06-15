@@ -11,7 +11,7 @@ s3fs==2022.10.0
 prefect==2.20.8
 prefect[dask]==2.20.8
 tqdm
-pymongo==4.8.0
+pymongo==4.10.1
 PyPDF2
 pdfplumber
 pycryptodome
@@ -19,3 +19,7 @@ openai==1.52.0
 langchain==0.2.9
 langchain-openai==0.1.25
 backoff
+pdf2image
+opencv-python
+matplotlib
+cloudwatch

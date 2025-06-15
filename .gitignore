@@ -8,3 +8,11 @@ summit-demo/
 /api-sejm-facade
 /preprocessing/lines
 /preprocessing/pdfs
+/preprocessing/__pycache__/
+/preprocessing/utils/__pycache__/
+/preprocessing/pdf_utils/__pycache__/
+preprocessing/pdf_elements/__pycache__/
+preprocessing/pdf_boundaries/__pycache__/
+preprocessing/mongo_db/__pycache__/
+/dask/.idea
+*.pyc

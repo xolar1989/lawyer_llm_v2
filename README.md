@@ -84,7 +84,9 @@ I need create api facade for this api
 https://www.saos.org.pl/help/index.php/dokumentacja-api/api-przegladania-danych
 
 
+### Problem with wsl, (DNS issue)
 
+https://gist.github.com/coltenkrauter/608cfe02319ce60facd76373249b8ca6
 
 
 ### Rozporządzenia 

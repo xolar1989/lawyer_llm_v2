@@ -16,7 +16,6 @@ dependencies:
   - tornado=6.1
   - boto3
   - pyarrow
-  - pymongo
   - PyPDF2
   - pdfplumber
   - pycryptodome
@@ -25,12 +24,18 @@ dependencies:
   - matplotlib
   - pip
   - pip:
+      - upstash-ratelimit
+      - upstash-redis
+      - dnspython
+      - memory-profiler
+      - pytesseract
       - backoff
       - opencv-python
       - pdf2image
-      - spire-pdf
+      - cloudwatch
       - langchain==0.2.9
       - langchain-openai==0.1.19
+      - pymongo
       - openai==1.37.1
       - prefect[dask]==2.20.0  # Install preprocessing[dask] using pip
       - tqdm

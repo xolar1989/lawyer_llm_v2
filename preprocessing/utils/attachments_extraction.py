@@ -1,12 +1,45 @@
 import re
-from typing import List, Union, Tuple, Set
+from typing import List, Union, Tuple, Set, Dict, Any, Match, Mapping
 
 import pdfplumber
 
-from preprocessing.utils.page_regions import LegalActPageRegion
+from preprocessing.mongo_db.mongodb import MongodbObject
+from preprocessing.utils.page_regions import LegalActPageRegion, LegalActPageRegionParagraphs, \
+    LegalActPageRegionMarginNotes, LegalActPageRegionFooterNotes
 
 
-class AttachmentPageRegion:
+class PageRegions(MongodbObject):
+
+    def __init__(self, paragraphs: List['LegalActPageRegionParagraphs'],
+                 margin_notes: List['LegalActPageRegionMarginNotes'],
+                 footer_notes: List['LegalActPageRegionFooterNotes'],
+                 attachments: List['LegalActPageRegionAttachment']
+                 ):
+        self.paragraphs = paragraphs
+        self.margin_notes = margin_notes
+        self.footer_notes = footer_notes
+        self.attachments = attachments
+
+
+    def to_dict(self):
+        return {
+            "paragraphs": [paragraph.to_dict() for paragraph in self.paragraphs],
+            "margin_notes": [margin_note.to_dict() for margin_note in self.margin_notes],
+            "footer_notes": [footer_note.to_dict() for footer_note in self.footer_notes],
+            "attachments": [attachment.to_dict() for attachment in self.attachments]
+        }
+
+    @classmethod
+    def from_dict(cls, dict_object: Mapping[str, Any]):
+        return cls(
+            paragraphs=[LegalActPageRegionParagraphs.from_dict(paragraph) for paragraph in dict_object["paragraphs"]],
+            margin_notes=[LegalActPageRegionMarginNotes.from_dict(margin_note) for margin_note in dict_object["margin_notes"]],
+            footer_notes=[LegalActPageRegionFooterNotes.from_dict(footer_note) for footer_note in dict_object["footer_notes"]],
+            attachments=[AttachmentRegion.from_dict(attachment) for attachment in dict_object["attachments"]]
+        )
+
+class AttachmentPageRegion(MongodbObject):
+
 
     def __init__(self, start_x: float, start_y: float, end_x: float, end_y: float, page_number: int, page_height: float):
         self.start_x = start_x
@@ -27,12 +60,46 @@ class AttachmentPageRegion:
             page_height=page_height
         )
 
+    def to_dict(self):
+        return {
+            "start_x": self.start_x,
+            "start_y": self.start_y,
+            "end_x": self.end_x,
+            "end_y": self.end_y,
+            "page_number": self.page_number,
+            "page_height": self.page_height
+        }
 
-class AttachmentRegion:
+    @classmethod
+    def from_dict(cls, dict_object: Mapping[str, Any]):
+        return cls(
+            start_x=dict_object["start_x"],
+            start_y=dict_object["start_y"],
+            end_x=dict_object["end_x"],
+            end_y=dict_object["end_y"],
+            page_number=dict_object["page_number"],
+            page_height=dict_object["page_height"]
+        )
+
+
+class AttachmentRegion(MongodbObject):
 
     def __init__(self, page_regions: List[AttachmentPageRegion], name: str):
         self._page_regions = page_regions
         self._name = name
+
+    def to_dict(self):
+        return {
+            "page_regions": [page_region.to_dict() for page_region in self.page_regions],
+            "name": self.name
+        }
+
+    @classmethod
+    def from_dict(cls, dict_object: Mapping[str, Any]):
+        return cls(
+            page_regions=[AttachmentPageRegion.from_dict(page_region) for page_region in dict_object["page_regions"]],
+            name=dict_object["name"]
+        )
 
     @classmethod
     def build(cls, attachment_header_index: int, pdf: pdfplumber.pdf, attachments_names: List[str],
@@ -80,15 +147,16 @@ class AttachmentRegion:
                                     attachment_page_region.end_x,
                                     attachment_page_region.end_y)
             words = page.within_bbox(page_attachment_bbox).extract_words()
+
             match_text = re.sub(r'[\s\n\r]+', ' ', attachment_header)
             for idx, word in enumerate(words):
                 # Join words to compare with match_text, and check within a reasonable range
                 text_before_start = ' '.join(w['text'] for w in words[:idx])
                 candidate_text = ' '.join(w['text'] for w in words[idx:idx + len(match_text.split())])
-                if match_text == candidate_text and AttachmentRegion.is_start_of_the_page(text_before_start):
+                if match_text in candidate_text and AttachmentRegion.is_start_of_the_page(text_before_start):
 
                     return attachment_page_region.start_y, attachment_page_region.page_number
-                elif match_text == candidate_text:
+                elif match_text in candidate_text:
                     return words[idx]['top'] - buffer, attachment_page_region.page_number
 
         raise ValueError(f"Attachment header {attachment_header} not found in the attachments page regions")
@@ -106,18 +174,20 @@ class AttachmentRegion:
                                     attachment_page_region.end_x,
                                     attachment_page_region.end_y)
             words = page.within_bbox(page_attachment_bbox).extract_words()
-
+            if next_attachment_header == 'Załącznik nr 5':
+                r = 4
+                text = page.within_bbox(page_attachment_bbox).extract_text()
             match_text = re.sub(r'[\s\n\r]+', ' ', next_attachment_header)
             for idx, word in enumerate(words):
                 # Join words to compare with match_text, and check within a reasonable range
                 text_before_start = ' '.join(w['text'] for w in words[:idx])
                 candidate_text = ' '.join(w['text'] for w in words[idx:idx + len(match_text.split())])
-                if match_text == candidate_text and AttachmentRegion.is_start_of_the_page(text_before_start):
+                if match_text in candidate_text and AttachmentRegion.is_start_of_the_page(text_before_start):
                     if index < 1:
                         raise ValueError(
                             f"Invalid state ,Attachment header {next_attachment_header} not found in the attachments page regions")
                     return attachments_page_regions[index - 1].end_y, attachments_page_regions[index - 1].page_number
-                elif match_text == candidate_text:
+                elif match_text in candidate_text:
                     return words[idx]['top'], attachment_page_region.page_number
 
         raise ValueError(f"Attachment header {next_attachment_header} not found in the attachments page regions")
@@ -135,6 +205,24 @@ class AttachmentRegion:
         self._page_regions.append(region)
 
 
+def get_matches_for_attachments(text:str) -> List[Match[bytes]]:
+    """
+    Find matches for attachments in a PDF
+    :param pdf: pdfplumber.pdf.PDF object
+    :return: List of matches for attachments
+    """
+    patterns = [
+        LegalActPageRegion.LEGAL_ANNOTATION_PATTERN_1,
+        LegalActPageRegion.LEGAL_ANNOTATION_PATTERN_2,
+    ]
+
+    for pattern in patterns:
+        matches = list(re.finditer(pattern, text, re.DOTALL))
+        if matches:
+            return matches
+
+    return []
+
 def get_pages_with_attachments(pdf: pdfplumber.pdf.PDF) -> Set[int]:
     """
     Find pages with attachments in a PDF
@@ -142,16 +230,23 @@ def get_pages_with_attachments(pdf: pdfplumber.pdf.PDF) -> Set[int]:
     :return: List of page numbers with attachments
     """
     attachment_pages = set()
-    for page_index, page in enumerate(pdf.pages):
-        text = page.extract_text()
-        matches = list(re.finditer(LegalActPageRegion.LEGAL_ANNOTATION_PATTERN, text, re.DOTALL))
-        if matches and len(matches) > 0:
-            for page_from_index in range(page_index, len(pdf.pages)):
-                page_iter = pdf.pages[page_from_index]
-                attachment_pages.add(page_iter.page_number)
-            return attachment_pages
-    return attachment_pages
+    for page_index in range(len(pdf.pages)):
+        try:
+            page = pdf.pages[page_index]
+            text = page.extract_text()
+            matches = get_matches_for_attachments(text)
+            if any(matches):
+                for page_from_index in range(page_index, len(pdf.pages)):
+                    page_iter = pdf.pages[page_from_index]
+                    attachment_pages.add(page_iter.page_number)
+                    del page_iter
+                break
+            del text
+        finally:
+            pdf.flush_cache()
+            del page
 
+    return attachment_pages
 
 def get_attachments_headers(pdf: pdfplumber.pdf.PDF, attachments_page_regions: List[Union[LegalActPageRegion, None]]) -> \
         List[str]:
@@ -167,10 +262,13 @@ def get_attachments_headers(pdf: pdfplumber.pdf.PDF, attachments_page_regions: L
                                 attachment_page_region.end_x,
                                 attachment_page_region.end_y)
         text_of_page_within_attachment = page.within_bbox(page_attachment_bbox).extract_text()
-        matches = list(re.finditer(LegalActPageRegion.LEGAL_ANNOTATION_PATTERN, text_of_page_within_attachment, re.DOTALL))
+        matches = get_matches_for_attachments(text_of_page_within_attachment)
         for match in matches:
             header = match.group(1).strip()
+            header = re.sub(r'(\d)\)$', "", header) ## TODO TO fix it ?? added due to this case Załącznik nr 63)
             if header in attachment_headers:
-                raise ValueError(f"Invalid state in finding attachments headers: {header} already found.")
-            attachment_headers.append(header)
+                print(f"Invalid state in finding attachments headers: {header} already found, skipping... ")
+            else:
+                attachment_headers.append(header)
+        del page
     return attachment_headers

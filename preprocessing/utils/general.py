@@ -17,6 +17,17 @@ def timeit(func):
 
     return wrapper
 
+def timeit_worker(func):
+    def wrapper(*args, **kwargs):
+        start_time = time.time()  # Start time
+        result = func(*args, **kwargs)  # Execute the function
+        end_time = time.time()  # End time
+        execution_time = end_time - start_time
+        print(f"Function '{func.__name__}' took {execution_time:.6f} seconds to execute.")
+        return result
+
+    return wrapper
+
 
 def get_secret(secret_name, region_name):
     # Create a Secrets Manager client

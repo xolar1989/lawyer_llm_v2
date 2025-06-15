@@ -2,13 +2,22 @@ import logging
 import time
 import uuid
 from functools import wraps
+from types import FunctionType
+from typing import Callable
 
 import boto3
+import pandas as pd
 from botocore.client import BaseClient
+from cloudwatch import cloudwatch
+from dask import delayed
+from dask.distributed import Client, as_completed
 from botocore.exceptions import ClientError
+import dask.dataframe as dd
+from tqdm import tqdm
 
-from preprocessing.utils.defaults import AWS_REGION
+from preprocessing.utils.defaults import AWS_REGION, DAG_TABLE_ID
 from preprocessing.utils.sensor import Sensor
+from preprocessing.utils.stage_def import get_storage_options_for_ddf_dask
 
 
 class DaskCluster:
@@ -41,7 +50,7 @@ class DaskCluster:
                                     stack_name=stack_name,
                                     cloudformation_client=cloudformation_client,
                                     action_type='CREATE'
-            )
+                                    )
         return cls(
             stack_name=stack_name,
             cluster_name=cluster_name,
@@ -201,7 +210,6 @@ class DaskCluster:
 
     def restart_workers_service(self):
 
-
         ## Todo get here all arns of task and in dask_cluster_workers_service_status_restart check that certain arn is not in this list previous tasks arns
         task_arns = self.ecs_client.list_tasks(
             cluster=self.cluster_name,
@@ -283,7 +291,6 @@ class DaskCluster:
             ]
             r = 4
 
-
         print(f"Amount of tasks before restart: {len(prev_tasks_arns)}, new tasks have already launched: "
               f"{len(new_running_tasks)}")
 
@@ -298,6 +305,48 @@ class DaskCluster:
         except Exception as e:
             print(f"An error occurred: {e}")
             raise Exception(f"An error occurred: {e}")
+
+
+
+def time_execution_dask_task(func):
+    aws_info = get_storage_options_for_ddf_dask(AWS_REGION)
+
+    """Decorator to measure the execution time of a function and log flow information."""
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        flow_information = kwargs.get('flow_information')
+        if not flow_information:
+            raise ValueError("Flow information not provided.")
+        logger = logging.getLogger(f"{func.__name__}/{flow_information[DAG_TABLE_ID]}")
+        # Create the formatter
+        formatter = logging.Formatter('%(levelname)s - %(message)s')
+        # ---- Create the Cloudwatch Handler ----
+        handler = cloudwatch.CloudwatchHandler(
+            access_id=aws_info['key'],
+            access_key=aws_info['secret'],
+            region=aws_info['client_kwargs']['region_name'],
+            log_group=f'preprocessing/{func.__name__}',
+            log_stream=f'{flow_information[DAG_TABLE_ID]}'
+        )
+        handler.setFormatter(formatter)
+        logger.setLevel(logging.WARNING)
+        logger.addHandler(handler)
+
+        start_time = time.time()
+
+        # Run the actual function
+        result = func(*args, **kwargs)
+
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+
+        logger.info(
+            f"Execution time for {func.__name__}: {elapsed_time:.2f} seconds with flow_information: {flow_information}")
+
+        return result
+
+    return wrapper
 
 
 def retry_dask_task(retries: int = 3, delay: int = 5):

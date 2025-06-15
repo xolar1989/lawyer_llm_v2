@@ -1,56 +1,40 @@
-import json
+import io
 import math
-import os
-import re
-import tempfile
 import time
 from abc import abstractmethod, ABC
 from datetime import datetime, timedelta
 from io import BytesIO
-from typing import Union, Dict, Sequence, Set, Match, List
+from typing import Sequence, Set
 
 import boto3
-import fitz
 import numpy as np
 import pandas as pd
 import dask.dataframe as dd
-import pymupdf4llm
-import requests
 from PIL.Image import Image
-from PIL.PpmImagePlugin import PpmImageFile
-from dask.distributed import Client, as_completed
-from matplotlib import pyplot as plt
+from dask.distributed import Client
 from numpy import ndarray
-from requests.adapters import HTTPAdapter
 
-from spire.pdf.common import *
 from spire.pdf import *
-from tqdm import tqdm
 
 from preprocessing.kkk import get_storage_options_for_ddf_dask
 from preprocessing.utils.dask_cluster import retry_dask_task
 from preprocessing.utils.datalake import Datalake
 from preprocessing.utils.defaults import DATALAKE_BUCKET, SEJM_API_URL, AWS_REGION
-from preprocessing.utils.dynamodb_helper import meta_DULegalDocumentsMetaData_without_filename, \
-    meta_DULegalDocumentsMetaData
-from preprocessing.utils.mongodb import get_mongodb_collection, MongodbCollection, MongodbCollectionIndex
-from preprocessing.utils.mongodb_schema import extract_text_and_table_page_number_stage_schema
+from preprocessing.mongo_db.mongodb import MongodbCollection, MongodbCollectionIndex
+from preprocessing.mongo_db.mongodb_schema import extract_text_and_table_page_number_stage_schema
 
 from preprocessing.utils.s3_helper import upload_json_to_s3, extract_bucket_and_key
-from pymongo import MongoClient, ASCENDING
-import pyarrow as pa
-import pyarrow.parquet as pq
-import matplotlib
+from pymongo import ASCENDING
 
 from preprocessing.utils.sejm_api_utils import make_api_call
 # from bs4 import BeautifulSoup
-from pdf2image import convert_from_path, convert_from_bytes
+from pdf2image import convert_from_bytes
 import cv2
 
 import pdfplumber
 
 import re
-from PyPDF2 import PdfWriter, PdfReader, PdfFileReader, PdfFileWriter
+from PyPDF2 import PdfFileReader, PdfFileWriter
 
 # Define the regex pattern for identifying "Załącznik" sections
 LEGAL_ANNOTATION_PATTERN = r"(Z\s*a\s*[łl]\s*[aą]\s*c\s*z\s*n\s*i\s*k\s+(?:n\s*r\s+\d+[a-z]*|d\s*o\s+u\s*s\s*t\s*a\s*w\s*y)\s*?)(.*?)(?=(?:\s*Z\s*a\s*[łl]\s*[aą]\s*c\s*z\s*n\s*i\s*k\s+(?:n\s*r\s+\d+[a-z]*|d\s*o\s+u\s*s\s*t\s*a\s*w\s*y))|$)"
@@ -104,7 +88,38 @@ class LegalActPageRegion(ABC):
 
         cnts = cv2.findContours(detected_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cnts = cnts[0] if len(cnts) == 2 else cnts[1]
-        return sorted([cv2.boundingRect(c) for c in cnts], key=lambda x: x[1])
+        return sorted(
+            [cv2.boundingRect(c) for c in cnts if cv2.boundingRect(c)[2] >= 150],  # Filter based on width
+            key=lambda x: x[1]  # Sort by the vertical position (y)
+        )
+
+    @staticmethod
+    def get_vertical_line_positions(image: ndarray):
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+        # Step 2: Apply binary thresholding
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+        # Step 3: Morphological operations to group text
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (50, 5))  # Adjust kernel size for horizontal text grouping
+        dilated = cv2.dilate(binary, kernel, iterations=1)
+
+        # Step 4: Find contours of text regions
+        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Step 5: Filter out margin notes
+        image_width = image.shape[1]
+        margin_threshold = int(image_width * 0.8)  # Filter out regions on the far right (e.g., > 80% of the page width)
+
+        min_x, max_x = image_width, 0
+
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            if x + w < margin_threshold and w > 30:  # Exclude margin notes and small artifacts
+                min_x = min(min_x, x)  # Update min_x
+                max_x = max(max_x, x + w)  # Update max_x
+
+        return [min_x, max_x]
 
     @staticmethod
     @abstractmethod
@@ -126,6 +141,21 @@ class LegalActPageRegion(ABC):
     def get_x_axis(**kwargs) -> Tuple[float, float]:
         pass
 
+    @staticmethod
+    @abstractmethod
+    def get_top_y_using_vertical_lines(**kwargs) -> float:
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def get_bottom_y_using_vertical_lines(**kwargs) -> float:
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def get_x_axis_using_vertical_lines(**kwargs) -> Tuple[float, float]:
+        pass
+
 
 class LegalActPageRegionParagraphs(LegalActPageRegion):
 
@@ -135,24 +165,96 @@ class LegalActPageRegionParagraphs(LegalActPageRegion):
         line_positions = LegalActPageRegion.get_line_positions(image_np)
         scaling_factor = get_scaling_factor(page_pdf, image_np)
 
-        header_y_pdf = LegalActPageRegionParagraphs.get_top_y(line_positions, scaling_factor)
-        footer_y_pdf = LegalActPageRegionParagraphs.get_bottom_y(page_pdf,
+        # Draw lines on the image
+        for (x, y, w, h) in line_positions:
+            cv2.rectangle(image_np, (x, y), (x + w, y + h), (0, 255, 0), 2)  # Draw a rectangle around each line
+
+            # Save the modified image to the local directory
+        os.makedirs("./lines", exist_ok=True)
+        output_path = f"./lines/{page_pdf.page_number}.jpg"  # Specify output path
+        cv2.imwrite(output_path, image_np)
+
+        image = image_np
+
+        line_positions_vertical = LegalActPageRegion.get_vertical_line_positions(image)
+        min_x = line_positions_vertical[0]
+        max_x = line_positions_vertical[1]
+        image_width = image.shape[1]
+
+        ## TODO leave it here !!!!!!!
+        # Step 6: Draw vertical lines
+        output_image = image.copy()
+        if min_x < image_width:  # Ensure min_x was updated
+            cv2.line(output_image, (min_x, 0), (min_x, image.shape[0]), (255, 0, 0), 2)  # Vertical line at min_x
+        if max_x > 0:  # Ensure max_x was updated
+            cv2.line(output_image, (max_x, 0), (max_x, image.shape[0]), (255, 0, 0), 2)  # Vertical line at max_x
+
+        # Step 7: Save and display the result
+        output_path = f"./lines_2/{page_pdf.page_number}.jpg"
+        cv2.imwrite(output_path, output_image)
+
+        # LegalActPageRegionParagraphs.get_bottom_y_using_vertical_lines(line_positions, line_positions_vertical, scaling_factor)
+
+        try:
+            top_y = LegalActPageRegionParagraphs.get_top_y(line_positions, page_pdf, scaling_factor)
+            bottom_y = LegalActPageRegionParagraphs.get_bottom_y(page_pdf,
                                                                  line_positions,
                                                                  scaling_factor, buffer)
-        header_x_start_pdf, header_x_end_pdf = LegalActPageRegionParagraphs.get_x_axis(line_positions[0],
-                                                                                       scaling_factor)
+            start_x, end_x = LegalActPageRegionParagraphs.get_x_axis(line_positions[0], scaling_factor)
+        except Exception as e:
+            print(f"Error in page {page_pdf.page_number}: {e}")
+            print(f"Using Vertical lines for {page_pdf.page_number}")
+            top_y = LegalActPageRegionParagraphs.get_top_y_using_vertical_lines(line_positions_vertical, scaling_factor)
+            bottom_y = LegalActPageRegionParagraphs.get_bottom_y_using_vertical_lines(line_positions,
+                                                                                      line_positions_vertical, page_pdf,
+                                                                                      scaling_factor)
+            start_x, end_x = LegalActPageRegionParagraphs.get_x_axis_using_vertical_lines(
+                line_positions_vertical,
+                scaling_factor)
+
         return LegalActPageRegionParagraphs(
-            start_x=header_x_start_pdf - buffer,
-            end_x=header_x_end_pdf + buffer,
-            start_y=header_y_pdf + buffer,
-            end_y=footer_y_pdf - buffer,
+            start_x=start_x - buffer,
+            end_x=end_x + buffer,
+            start_y=top_y + buffer,
+            end_y=bottom_y - buffer,
             page_number=page_pdf.page_number
         )
 
     @staticmethod
-    def get_top_y(line_positions: List[Sequence[int]], scaling_factor: float) -> float:
+    def get_top_y_using_vertical_lines(line_positions_vertical: List[int], scaling_factor: float) -> float:
+        return 0.0
+
+    @staticmethod
+    def get_bottom_y_using_vertical_lines(line_positions_horizontal: List[Sequence[int]],
+                                          line_positions_vertical: List[int], page_pdf: pdfplumber.pdf.Page,
+                                          scaling_factor: float) -> float:
+        if len(line_positions_vertical) != 2 or line_positions_vertical[1] <= line_positions_vertical[0]:
+            raise ValueError("Line positions vertical not found, or have invalid values")
+        if len(line_positions_horizontal) > 0 and line_positions_horizontal[-1]:
+            footer_x_start, footer_y, footer_width, _ = line_positions_horizontal[-1]
+
+            footer_x_start = footer_x_start * scaling_factor
+            left_line_x = line_positions_vertical[0]
+            left_line_x = left_line_x * scaling_factor
+            if left_line_x < footer_x_start - 13:
+                return LegalActPageRegionParagraphs.get_bottom_y_without_line(page_pdf)
+            return footer_y * scaling_factor
+        return LegalActPageRegionParagraphs.get_bottom_y_without_line(page_pdf)
+
+    @staticmethod
+    def get_x_axis_using_vertical_lines(line_positions_vertical: List[int], scaling_factor: float) -> Tuple[
+        float, float]:
+        if len(line_positions_vertical) != 2 or line_positions_vertical[1] <= line_positions_vertical[0]:
+            raise ValueError("Line positions vertical not found, or have invalid values")
+        return line_positions_vertical[0] * scaling_factor, line_positions_vertical[1] * scaling_factor
+
+    @staticmethod
+    def get_top_y(line_positions: List[Sequence[int]], page_pdf: pdfplumber.pdf.Page, scaling_factor: float) -> float:
         if len(line_positions) > 0 and line_positions[0]:
             header_x_start, header_y, header_width, _ = line_positions[0]
+            if header_y * scaling_factor > page_pdf.height * 0.2:
+                raise ValueError("Header position not found, line is not detected in correct position")
+
             return header_y * scaling_factor
         else:
             raise ValueError("Header position not found")
@@ -200,9 +302,20 @@ class LegalActPageRegionMarginNotes(LegalActPageRegion):
         image_np = np.array(page_image.convert("RGB"))
         line_positions = LegalActPageRegion.get_line_positions(image_np)
         scaling_factor = get_scaling_factor(page_pdf, image_np)
-        y_start = LegalActPageRegionMarginNotes.get_top_y(line_positions, scaling_factor)
-        x_start, x_end = LegalActPageRegionMarginNotes.get_x_axis(page_pdf, line_positions, scaling_factor)
-        y_end = LegalActPageRegionMarginNotes.get_bottom_y(page_pdf)
+        try:
+            y_start = LegalActPageRegionMarginNotes.get_top_y(line_positions, scaling_factor)
+            x_start, x_end = LegalActPageRegionMarginNotes.get_x_axis(page_pdf, line_positions, scaling_factor)
+            y_end = LegalActPageRegionMarginNotes.get_bottom_y(page_pdf)
+        except Exception as e:
+            print(f"Error in page {page_pdf.page_number}: {e}")
+            print(f"Using Vertical lines for {page_pdf.page_number}")
+            vertical_line_positions = LegalActPageRegion.get_vertical_line_positions(image_np)
+            y_start = LegalActPageRegionMarginNotes.get_top_y_using_vertical_lines()
+            x_start, x_end = LegalActPageRegionMarginNotes \
+                .get_x_axis_using_vertical_lines(page_pdf,
+                                                 vertical_line_positions,
+                                                 scaling_factor)
+            y_end = LegalActPageRegionMarginNotes.get_bottom_y_using_vertical_lines(page_pdf)
         return LegalActPageRegionMarginNotes(
             start_x=x_start + buffer,
             end_x=x_end,
@@ -212,9 +325,11 @@ class LegalActPageRegionMarginNotes(LegalActPageRegion):
         )
 
     @staticmethod
-    def get_top_y(line_positions: List[Sequence[int]], scaling_factor: float) -> float:
+    def get_top_y(line_positions: List[Sequence[int]], page_pdf: pdfplumber.pdf.Page, scaling_factor: float) -> float:
         if len(line_positions) > 0 and line_positions[0]:
             header_x_start, header_y, header_width, _ = line_positions[0]
+            if header_y * scaling_factor > page_pdf.height * 0.2:
+                raise ValueError("Header position not found, line is not detected in correct position")
             return header_y * scaling_factor
         else:
             raise ValueError("Header position not found")
@@ -236,6 +351,24 @@ class LegalActPageRegionMarginNotes(LegalActPageRegion):
     def get_bottom_y(page: pdfplumber.pdf.Page) -> float:
         return page.height
 
+    @staticmethod
+    def get_top_y_using_vertical_lines() -> float:
+        return 0.0
+
+    @staticmethod
+    def get_bottom_y_using_vertical_lines(page: pdfplumber.pdf.Page) -> float:
+        return page.height
+
+    @staticmethod
+    def get_x_axis_using_vertical_lines(page_pdf: pdfplumber.pdf.Page, line_positions_vertical: List[int],
+                                        scaling_factor: float) -> Tuple[
+        float, float]:
+        if len(line_positions_vertical) != 2 or line_positions_vertical[1] <= line_positions_vertical[0]:
+            raise ValueError("Line positions vertical not found, or have invalid values")
+        if line_positions_vertical[1] * scaling_factor >= page_pdf.width:
+            raise ValueError("Header position not found, out of page")
+        return line_positions_vertical[1] * scaling_factor, page_pdf.width
+
 
 class LegalActPageRegionFooterNotes(LegalActPageRegion):
 
@@ -244,6 +377,7 @@ class LegalActPageRegionFooterNotes(LegalActPageRegion):
         image_np = np.array(page_image.convert("RGB"))
         line_positions = LegalActPageRegion.get_line_positions(image_np)
         scaling_factor = get_scaling_factor(page_pdf, image_np)
+
         if len(line_positions) > 1 and line_positions[-1]:
             footer_x_start, footer_y, footer_width, _ = line_positions[-1]
             header_x_start, header_y, header_width, _ = line_positions[0]
@@ -254,6 +388,36 @@ class LegalActPageRegionFooterNotes(LegalActPageRegion):
                 top_y = LegalActPageRegionFooterNotes.get_top_y(footer_y, scaling_factor)
                 x_start, x_end = LegalActPageRegionFooterNotes.get_x_axis(line_positions, scaling_factor)
                 y_end = LegalActPageRegionFooterNotes.get_bottom_y(page_pdf)
+                return LegalActPageRegionFooterNotes(
+                    start_x=x_start - buffer,
+                    end_x=x_end + buffer,
+                    start_y=top_y,
+                    end_y=y_end - buffer,
+                    page_number=page_pdf.page_number
+                )
+            print(f"Error in page {page_pdf.page_number}: {e}")
+            print(f"Using Vertical lines for {page_pdf.page_number}")
+            vertical_line_positions = LegalActPageRegion.get_vertical_line_positions(image_np)
+            if vertical_line_positions[0]* scaling_factor >= footer_x_start*scaling_factor - 13:
+                top_y = LegalActPageRegionFooterNotes.get_top_y_using_vertical_lines(footer_y, scaling_factor)
+                x_start, x_end = LegalActPageRegionFooterNotes.get_x_axis_using_vertical_lines(vertical_line_positions,
+                                                                                               scaling_factor)
+                y_end = LegalActPageRegionFooterNotes.get_bottom_y_using_vertical_lines(page_pdf)
+                return LegalActPageRegionFooterNotes(
+                    start_x=x_start - buffer,
+                    end_x=x_end + buffer,
+                    start_y=top_y,
+                    end_y=y_end - buffer,
+                    page_number=page_pdf.page_number
+                )
+        elif len(line_positions) == 1 and line_positions[0]:
+            footer_x_start, footer_y, footer_width, _ = line_positions[0]
+            vertical_line_positions = LegalActPageRegion.get_vertical_line_positions(image_np)
+            if footer_y * scaling_factor > page_pdf.height * 0.15 and vertical_line_positions[0]*scaling_factor >= footer_x_start*scaling_factor - 13:
+                top_y = LegalActPageRegionFooterNotes.get_top_y_using_vertical_lines(footer_y, scaling_factor)
+                x_start, x_end = LegalActPageRegionFooterNotes.get_x_axis_using_vertical_lines(vertical_line_positions,
+                                                                                               scaling_factor)
+                y_end = LegalActPageRegionFooterNotes.get_bottom_y_using_vertical_lines(page_pdf)
                 return LegalActPageRegionFooterNotes(
                     start_x=x_start - buffer,
                     end_x=x_end + buffer,
@@ -280,6 +444,21 @@ class LegalActPageRegionFooterNotes(LegalActPageRegion):
             return header_x_start * scaling_factor, header_x_end * scaling_factor
         else:
             raise ValueError("Header position not found")
+
+    @staticmethod
+    def get_top_y_using_vertical_lines(footer_y_start: float, scaling_factor: float) -> float:
+        return footer_y_start * scaling_factor
+
+    @staticmethod
+    def get_bottom_y_using_vertical_lines(page_pdf: pdfplumber.pdf.Page) -> float:
+        return LegalActPageRegionParagraphs.get_bottom_y_without_line(page_pdf)
+
+    @staticmethod
+    def get_x_axis_using_vertical_lines(line_positions_vertical: List[int], scaling_factor: float) -> Tuple[
+        float, float]:
+        if len(line_positions_vertical) != 2 or line_positions_vertical[1] <= line_positions_vertical[0]:
+            raise ValueError("Line positions vertical not found, or have invalid values")
+        return line_positions_vertical[0] * scaling_factor, line_positions_vertical[1] * scaling_factor
 
 
 class LegalActPageRegionAttachment(LegalActPageRegion):
@@ -323,10 +502,23 @@ class LegalActPageRegionAttachment(LegalActPageRegion):
     def get_x_axis(page_pdf: pdfplumber.pdf.Page) -> Tuple[float, float]:
         return 0.0, page_pdf.width
 
+    @staticmethod
+    def get_top_y_using_vertical_lines(**kwargs) -> float:
+        pass
+
+    @staticmethod
+    def get_bottom_y_using_vertical_lines(**kwargs) -> float:
+        pass
+
+    @staticmethod
+    def get_x_axis_using_vertical_lines(**kwargs) -> Tuple[float, float]:
+        pass
+
 
 class AttachmentPageRegion:
 
-    def __init__(self, start_x: float, start_y: float, end_x: float, end_y: float, page_number: int, page_height: float):
+    def __init__(self, start_x: float, start_y: float, end_x: float, end_y: float, page_number: int,
+                 page_height: float):
         self.start_x = start_x
         self.start_y = start_y
         self.end_x = end_x
@@ -478,6 +670,12 @@ def get_pages_with_attachments(pdf: pdfplumber.pdf.PDF) -> Set[int]:
                 page_iter = pdf.pages[page_from_index]
                 attachment_pages.add(page_iter.page_number)
             return attachment_pages
+        else:
+            matches = list(re.finditer(r"[\n\r]+Z\s*a\s*[łl]\s*[aą]\s*c\s*z\s*n\s*i\s*k\s*[a-zA-Z\s\d]*[\n\r]+", text))
+            if matches and len(matches) > 0:
+                for page_from_index in range(page_index, len(pdf.pages)):
+                    page_iter = pdf.pages[page_from_index]
+                    attachment_pages.add(page_iter.page_number)
     return attachment_pages
 
 
@@ -496,11 +694,20 @@ def get_attachments_headers(pdf: pdfplumber.pdf.PDF, attachments_page_regions: L
                                 attachment_page_region.end_y)
         text_of_page_within_attachment = page.within_bbox(page_attachment_bbox).extract_text()
         matches = list(re.finditer(LEGAL_ANNOTATION_PATTERN, text_of_page_within_attachment, re.DOTALL))
-        for match in matches:
-            header = match.group(1).strip()
-            if header in attachment_headers:
-                raise ValueError(f"Invalid state in finding attachments headers: {header} already found.")
-            attachment_headers.append(header)
+        if len(matches) > 0:
+            for match in matches:
+                header = match.group(1).strip()
+                if header in attachment_headers:
+                    raise ValueError(f"Invalid state in finding attachments headers: {header} already found.")
+                attachment_headers.append(header)
+        else:
+            matches = list(re.finditer(r"[\n\r]+(Z\s*a\s*[łl]\s*[aą]\s*c\s*z\s*n\s*i\s*k)\s*[a-zA-Z\s\d]*[\n\r]+",
+                                       text_of_page_within_attachment, re.DOTALL))
+            for match in matches:
+                header = match.group(1).strip()
+                if header in attachment_headers:
+                    raise ValueError(f"Invalid state in finding attachments headers: {header} already found.")
+                attachment_headers.append(header)
     return attachment_headers
 
 
@@ -521,16 +728,22 @@ def declare_part_of_legal_act(pdf_bytes: BytesIO):
             if pdf_page.page_number not in pages_with_attachments:
                 page_region_text = LegalActPageRegionParagraphs.build(page_image, pdf_page)
                 page_regions_paragraphs.append(page_region_text)
-                # bbox = (
-                #     page_region_text.start_x, page_region_text.start_y, page_region_text.end_x,
-                #     page_region_text.end_y)
-                # extract_text = pdf_page.within_bbox(bbox).extract_text()
+                bbox = (
+                    page_region_text.start_x, page_region_text.start_y, page_region_text.end_x,
+                    page_region_text.end_y)
+                extract_text = pdf_page.within_bbox(bbox).extract_text()
+                r = 4
                 margin_notes = LegalActPageRegionMarginNotes.build(page_image, pdf_page)
                 page_regions_margin_notes.append(margin_notes)
+                bbox = (margin_notes.start_x, margin_notes.start_y, margin_notes.end_x, margin_notes.end_y)
+                extract_text_margin = pdf_page.within_bbox(bbox).extract_text()
                 footer_notes = LegalActPageRegionFooterNotes.build(page_image, pdf_page)
-
+                #
                 if footer_notes:
                     page_regions_footer_notes.append(footer_notes)
+                    bbox = (footer_notes.start_x, footer_notes.start_y, footer_notes.end_x, footer_notes.end_y)
+                    extract_text_footer = pdf_page.within_bbox(bbox).extract_text()
+                    r = 4
             else:
                 attachments_page_regions.append(LegalActPageRegionAttachment.build(page_image, pdf_page))
         attachment_headers = get_attachments_headers(pdf, attachments_page_regions)
@@ -548,7 +761,7 @@ def crop_pdf_attachments(pdf_content: str, datalake: Datalake, attachments_regio
     for i, attachment_region in enumerate(attachments_regions):
         pdf_writer = PdfFileWriter()
         for attachment_page_region in attachment_region.page_regions:
-            page = pdf_reader.getPage(attachment_page_region.page_number-1)
+            page = pdf_reader.getPage(attachment_page_region.page_number - 1)
             page_height = attachment_page_region.page_height
             top_y = page_height - attachment_page_region.start_y
             bottom_y = page_height - attachment_page_region.end_y
@@ -565,6 +778,7 @@ def crop_pdf_attachments(pdf_content: str, datalake: Datalake, attachments_regio
         output_stream = BytesIO()
         pdf_writer.write(output_stream)
         output_stream.seek(0)
+
 
 # def crop_pdf_attachments(pdf_content: str, datalake: Datalake, attachment_boundaries,
 #                          pages_boundaries: List[Dict[str, Union[int, float]]],
@@ -605,12 +819,14 @@ def crop_pdf_attachments(pdf_content: str, datalake: Datalake, attachments_regio
 pdf_s3_path = 's3://datalake-bucket-123/stages/documents-to-download-pdfs/74d77c70-0e2f-47d1-a98f-b56b4c181120/D20010639Lj.pdf'
 # pdf_s3_path = 's3://datalake-bucket-123/stages/documents-to-download-pdfs/74d77c70-0e2f-47d1-a98f-b56b4c181120/D19830207Lj.pdf'
 # pdf_s3_path = 's3://datalake-bucket-123/stages/documents-to-download-pdfs/74d77c70-0e2f-47d1-a98f-b56b4c181120/D19910031Lj.pdf'
+# pdf_s3_path = 's3://datalake-bucket-123/stages/documents-to-download-pdfs/74d77c70-0e2f-47d1-a98f-b56b4c181120/D20060550Lj.pdf'
 
 bucket, key = extract_bucket_and_key(pdf_s3_path)
 
 datalake = Datalake(datalake_bucket=DATALAKE_BUCKET, aws_region=AWS_REGION)
 
-bytes__kk = datalake.read_from_datalake_pdf(key)
+bytes__kk = io.BytesIO(
+    boto3.client('s3', region_name=AWS_REGION).get_object(Bucket=bucket, Key=key)['Body'].read())
 
 page_regions_paragraphs, page_regions_margin_notes, page_regions_footer_notes, attachments_regions = \
     declare_part_of_legal_act(bytes__kk)
@@ -865,7 +1081,7 @@ from pymongo.server_api import ServerApi
 #
 # t = 4
 
-# uri = "mongodb+srv://superUser:awglm12345@serverlessinstance0.vxbabj8.mongodb.net/?retryWrites=true&w=majority&appName=ServerlessInstance0"
+# uri = "mongo_db+srv://superUser:awglm12345@serverlessinstance0.vxbabj8.mongo_db.net/?retryWrites=true&w=majority&appName=ServerlessInstance0"
 
 # Create a new client and connect to the server
 # mongo_client = MongoClient(uri, server_api=ServerApi('1'))
@@ -1053,8 +1269,8 @@ r = 4
 
 def get_mongodb_collection(db_name, collection_name):
     ## localhost
-    uri = "mongodb+srv://superUser:awglm12345@serverlessinstance0.vxbabj8.mongodb.net/?retryWrites=true&w=majority&appName=ServerlessInstance0"
-    # uri = "mongodb+srv://superUser:awglm12345@serverlessinstance0-pe-1.vxbabj8.mongodb.net/"
+    uri = "mongo_db+srv://superUser:awglm12345@serverlessinstance0.vxbabj8.mongo_db.net/?retryWrites=true&w=majority&appName=ServerlessInstance0"
+    # uri = "mongo_db+srv://superUser:awglm12345@serverlessinstance0-pe-1.vxbabj8.mongo_db.net/"
 
     mongo_client = MongoClient(uri, server_api=ServerApi('1'))
     mongo_db = mongo_client[db_name]

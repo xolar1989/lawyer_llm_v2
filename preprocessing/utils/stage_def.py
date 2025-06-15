@@ -1,4 +1,7 @@
+import logging
+import time
 from abc import ABCMeta
+from functools import wraps
 from typing import Dict, Type
 
 import boto3
@@ -9,6 +12,7 @@ from prefect import task, flow, get_run_logger, Task
 from prefect.context import TaskRun
 from prefect.states import State, Completed
 from prefect.states import Failed
+from cloudwatch import cloudwatch
 
 from preprocessing.utils.defaults import AWS_REGION, DATALAKE_BUCKET, DAG_TABLE_ID
 
@@ -55,7 +59,6 @@ class FlowStep(metaclass=FlowMeta):
             if state.name == 'Completed':
                 logger.info(f"Task {task.task_run_name} completed successfully")
 
-
         def decorator(func):
             # Apply each decorator manually inside this combined decorator
             if 'retries' in kwargs:
@@ -63,10 +66,12 @@ class FlowStep(metaclass=FlowMeta):
                 func = FlowStep.handle_rollback(func, kwargs['retries'], attempt=attempt)  # Apply handle_rollback
             else:
                 func = FlowStep.handle_rollback(func)
-            func = task(task_run_name=task_run_name, on_completion=[on_completion_hook], **kwargs)(func)  # Apply task with task_run_name
+            func = task(task_run_name=task_run_name, on_completion=[on_completion_hook], **kwargs)(
+                func)  # Apply task with task_run_name
             return func
 
         return decorator
+
 
     @staticmethod
     def step_flow(flow_run_name):
@@ -81,10 +86,9 @@ class FlowStep(metaclass=FlowMeta):
         return decorator
 
 
-
     @staticmethod
-    def save_result_to_datalake(result_ddf: DataFrame, flow_information: Dict[str, str], stage_type: Type, result_name: str = 'results') -> str:
-
+    def save_result_to_datalake(result_ddf: DataFrame, flow_information: Dict[str, str], stage_type: Type,
+                                result_name: str = 'results') -> str:
         s3_path = f's3://{DATALAKE_BUCKET}/stages/${flow_information[DAG_TABLE_ID]}/{stage_type.__name__}/{result_name}.parquet.gzip'
         result_ddf.to_parquet(
             s3_path,
@@ -95,6 +99,7 @@ class FlowStep(metaclass=FlowMeta):
         )
         return s3_path
 
+
     @staticmethod
     def get_aws_client_for_dask_worker(client_type: str, storage_options: dict):
         return boto3.client(
@@ -103,6 +108,7 @@ class FlowStep(metaclass=FlowMeta):
             aws_secret_access_key=storage_options['secret'],
             region_name=storage_options['client_kwargs']['region_name']
         )
+
 
     @staticmethod
     def read_from_datalake(s3_path_parquet: str, meta: pd.DataFrame):
@@ -114,11 +120,13 @@ class FlowStep(metaclass=FlowMeta):
             {col: dtype.name for col, dtype in meta.dtypes.to_dict().items()})
         return ddf_from_parquet
 
+
     @staticmethod
     def handle_rollback(func, retries=None, attempt=0):
         """Static method decorator to handle exceptions and call rollback"""
+
         def wrapper(*args, **kwargs):
-            nonlocal attempt # TODO bad practice, but necessary for now, change this later
+            nonlocal attempt  # TODO bad practice, but necessary for now, change this later
             try:
                 # Try to execute the function
                 return func(*args, **kwargs)
@@ -136,29 +144,35 @@ class FlowStep(metaclass=FlowMeta):
 
         return wrapper
 
+
     @classmethod
     def set_previous_step(cls, step: 'FlowStep'):
         """Set the previous step for the current class."""
         cls._previous_step = step
+
 
     @classmethod
     def set_next_step(cls, step: 'FlowStep'):
         """Set the next step for the current class."""
         cls._next_step = step
 
+
     @classmethod
     def get_previous_step(cls) -> 'FlowStep':
         """Get the previous step for the current class."""
         return cls._previous_step
+
 
     @classmethod
     def get_next_step(cls) -> 'FlowStep':
         """Get the next step for the current class."""
         return cls._next_step
 
+
     @classmethod
     def run(cls, *args, **kwargs):
         pass
+
 
     @classmethod
     def rollback(cls, exception: FlowStepError):
