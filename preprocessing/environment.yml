@@ -24,6 +24,7 @@ dependencies:
   - matplotlib
   - pip
   - pip:
+      - python-doctr[torch]==0.11.0
       - upstash-ratelimit
       - upstash-redis
       - dnspython

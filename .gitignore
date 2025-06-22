@@ -14,5 +14,6 @@ summit-demo/
 preprocessing/pdf_elements/__pycache__/
 preprocessing/pdf_boundaries/__pycache__/
 preprocessing/mongo_db/__pycache__/
+preprocessing/stages/__pycache__/
 /dask/.idea
 *.pyc

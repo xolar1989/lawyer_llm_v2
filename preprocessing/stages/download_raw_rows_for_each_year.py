@@ -47,6 +47,7 @@ class DownloadRawRowsForEachYear(FlowStep):
     @classmethod
     def get_row_metadata_of_documents_each_year(cls, year, type_document, invoke_id):
         w = f"{SEJM_API_URL}/{type_document}/{year}"
+        print(w)
         response = make_api_call(f"{SEJM_API_URL}/{type_document}/{year}")
         if 'items' not in response:
             logging.error(

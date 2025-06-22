@@ -231,12 +231,18 @@ class TextLinePageLegalAct(OrderedObjectLegalAct):
         )
 
     @classmethod
-    def build_using_multi_line(cls, line_dict: Dict[str, Any], page: pdfplumber.pdf.Page,
-                               current_index: int,
+    def build_using_multi_line(cls, document_id: str,
+                               line_dict: Dict[str, Any], page: pdfplumber.pdf.Page,
+                               current_index: int, current_line_on_page: int,
                                multiline_llm_extractor: MultiLineTextExtractor) -> 'TextLinePageLegalAct':
         # TODO InMemoryRateLimiter ## add this take into account dask_cluster workers amount = for example 12 , max tokens limit per minute 450000 and let's say one invocation is around 1000 tokens in this case:
         #    for one worker for one second we have 625 tokens, so for each worker we should accept one invokaction at each 1.5-2 seconds
-        multiline_from_llm = multiline_llm_extractor.parse(line_dict, page)
+        multiline_from_llm = multiline_llm_extractor.parse(
+            document_id=document_id,
+            current_line_on_page=current_line_on_page,
+            line_dict=line_dict,
+            page=page
+        )
         line_x0 = line_dict['x0']
         line_x1 = line_dict['x1']
         char_multiline_width = (line_x1 - line_x0) / len(multiline_from_llm)

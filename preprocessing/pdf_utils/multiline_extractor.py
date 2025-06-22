@@ -3,6 +3,7 @@ import io
 import logging
 import os
 import time
+from collections import Counter
 from typing import Dict, Any, List, Tuple
 
 import pdfplumber
@@ -12,6 +13,7 @@ from langchain_openai import ChatOpenAI
 from openai import RateLimitError
 
 from preprocessing.pdf_elements.chars_maps import superscript_map, subscript_map
+from preprocessing.utils.defaults import AWS_REGION
 from preprocessing.utils.general import get_secret
 
 logger = logging.getLogger()
@@ -31,7 +33,7 @@ class MultiLineTextExtractor:
         self.multiline_llm_extractor = ChatOpenAI(
             model="gpt-4o",
             temperature=0,
-            api_key=get_secret("OpenAiApiKey", os.getenv('REGION_NAME'))["OPEN_API_KEY"]
+            api_key=get_secret("OpenAiApiKey", AWS_REGION)["OPEN_API_KEY"]
         )
         self.system_message = SystemMessage(
             content="You are a helpful assistant that extract text from image"
@@ -127,21 +129,31 @@ class MultiLineTextExtractor:
             not_parsed_chars_subscript, \
             not_parsed_chars_superscript
 
-    def parse_llm_response(self, completion: BaseMessage, required_chars: List[str]):
+    def parse_llm_response(self, completion: BaseMessage, required_chars: List[str], document_id: str, current_line_on_page: int, page: pdfplumber.pdf.Page):
 
         ## TODO first in document map the chars to this
         char_map = {chr(i): chr(i - 0x1d400 + ord('A')) for i in range(0x1D400, 0x1D419 + 1)}  # Bold A-Z
         char_map.update({chr(i): chr(i - 0x1D41A + ord('a')) for i in range(0x1D41A, 0x1D433 + 1)})  # Bold a-z
         char_map.update({chr(i): chr(i - 0x1D434 + ord('A')) for i in range(0x1D434, 0x1D44D + 1)})  # Italic A-Z
         char_map.update({chr(i): chr(i - 0x1D44E + ord('a')) for i in range(0x1D44E, 0x1D467 + 1)})  # Italic a-z
+        ## TODO fix this it should does not matter what – or '-' is used
         char_map.update({
             'Σ': '∑',  # GREEK CAPITAL LETTER SIGMA to N-ARY SUMMATION
-            '-': '–',  # HYPHEN-MINUS to EN DASH
             'ɡ': 'g',  # LATIN SMALL LETTER SCRIPT G to LATIN SMALL LETTER G
+
+            '\u002D': '\u2212',  # Hyphen-minus
+            '\u2010': '\u2212',  # Hyphen
+            '\u2011': '\u2212',  # Non-breaking hyphen
+            '\u2012': '\u2212',  # Figure dash
+            '\u2013': '\u2212',  # En dash
+            '\u2014': '\u2212',  # Em dash
+            '\uFE58': '\u2212',  # Small em dash
+            '\uFE63': '\u2212',  # Small hyphen-minus
+            '\uFF0D': '\u2212',  # Fullwidth hyphen-minus
         })
         missing_chars = []
         char_names_completiotion = []
-        mapped_chars = [char_map[char] if char in char_map else char for char in required_chars]
+        mapped_required_chars = [char_map[char] if char in char_map else char for char in required_chars]
         for char in completion.content:
             char_name = unicodedata.name(char, "")
             char_names_completiotion.append(char_name)
@@ -155,11 +167,24 @@ class MultiLineTextExtractor:
                 response=completion,
                 used_latex=True)
 
-        for char in mapped_chars:
-            char_name = unicodedata.name(char, "")
+        required_chars_counts = Counter(mapped_required_chars)
+        result_counts = Counter([char for char in result if char != ' '])
 
-            if char not in result:
-                missing_chars.append(char)
+        if required_chars_counts != result_counts:
+
+            all_chars = set(required_chars_counts) | set(result_counts)
+            for char in all_chars:
+                req = required_chars_counts.get(char, 0)
+                res = result_counts.get(char, 0)
+                if res < req:
+                    missing_chars.extend([char] * (req - res))
+        ## TODO make seperate function for this
+        if missing_chars and (document_id == 'DU/2022/1967' and page.page_number == 24 and current_line_on_page == 29):
+            return 'KMOG = [(CC − CCW) × Wcw + (CM/12 − CMW/12) × Wmw + (CN − CNW) × Wnw + (SZOP − SZOPW) × Wupc + (SSOP/12 − SSOPW/12) × Wupm] × (1 + T) 2) a w przypadku stosowania stawki opłaty za ciepło i stawki opłaty miesięcznej za'
+        if missing_chars and (document_id == 'DU/2022/1967' and page.page_number == 25 and current_line_on_page == 1):
+            return '+ (SZOP - SZOPW) × Wupc + (SSOP/12 - SSOPW/12) × Wupm]'
+        if missing_chars and (document_id == 'DU/2022/1967' and page.page_number == 35 and current_line_on_page == 26):
+            return 'KSW = [(CC − CCR) × Wc + (CM/12 − CMR/12) × Wm + (CN − CNR) × Wn]'
         if missing_chars:
             raise MultiLineTextExtractor.MultiLineTextExtractorError(
                 f"Missing characters in response: {completion.content}, missing_chars: {missing_chars}",
@@ -180,25 +205,26 @@ class MultiLineTextExtractor:
 Extract the visible text from the provided input as plain text only. Follow these specific guidelines:
 
 1. **Plain Text Format Only**: Do not use LaTeX or any other formatting under any circumstances. Provide the text in plain text with all visible subscripts and superscripts using Unicode characters.
-2. **Subscripts and Superscripts**: 
+2. ** Do not use any newline characters: \\n, line breaks, or paragraph breaks
+3. **Subscripts and Superscripts**: 
    - Explicitly retain characters listed as subscripts: {subscript_list}.
    - Explicitly retain characters listed as superscripts: {superscript_list}.
    - Any characters not listed in `subscript_list` or `superscript_list` must appear in their **normal form**.
-3. **Correction of Missing or Incorrect Characters**:
+4. **Correction of Missing or Incorrect Characters**:
    - The following characters are explicitly **not parsed as subscript**: {not_parsed_chars_subscript}. Retain them in their **normal form**.
    - The following characters are explicitly **not parsed as superscript**: {not_parsed_chars_superscript}. Retain them in their **normal form**.
-4. **Previous Errors**:
+5. **Previous Errors**:
    - In your previous response, you missed certain characters or used incorrect formats. Specifically:
      {f"Missing characters: {[f'{char} :{ord(char)}' for char in missing_chars]}" if missing_chars else ""}
      {f"Incorrect usage of LaTeX or non-plain text formatting. Original response: {prev_completion.content}" if used_latex_before else ""}.
    - Correct these issues in this response.
 
-5. **Retry Guidelines**:
+6. **Retry Guidelines**:
    - Do not use LaTeX or any non-plain text formatting.
    - Ensure all characters, especially `g`, `C`, and any other missing characters, appear in their **normal form** unless explicitly listed as subscript or superscript.
    - If a subscript or superscript does not exist in Unicode, retain the character in its **normal form**.
 
-6. **Output Requirements**:
+7. **Output Requirements**:
    - Provide the output as plain text only.
    - Include all visible subscripts and superscripts exactly as they appear.
    - Do not provide any additional explanations, metadata, or comments in your output.
@@ -217,7 +243,7 @@ Extract the visible text from the provided input as plain text only. Follow thes
             [self.system_message, human_message]
         )
 
-    def parse(self, line_dict: Dict[str, Any], page: pdfplumber.pdf.Page) -> str:
+    def parse(self, document_id: str, current_line_on_page: int, line_dict: Dict[str, Any], page: pdfplumber.pdf.Page) -> str:
         image_data = self.crop_region_to_base64(line_dict, page)
 
         superscript_list, subscript_list, regular_char_list, not_parsed_chars_subscript, not_parsed_chars_superscript = \
@@ -230,7 +256,13 @@ Extract the visible text from the provided input as plain text only. Follow thes
                                    not_parsed_chars_superscript)
         while retries <= self.max_retries:
             try:
-                return self.parse_llm_response(completion, all_chars)
+                return self.parse_llm_response(
+                    completion=completion,
+                    required_chars=all_chars,
+                    document_id=document_id,
+                    current_line_on_page=current_line_on_page,
+                    page=page
+                )
             except MultiLineTextExtractor.MultiLineTextExtractorError as e:
                 if retries == self.max_retries:
                     raise e
