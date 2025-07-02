@@ -29,7 +29,9 @@ from prefect import flow
 from prefect.context import get_run_context
 from tqdm import tqdm
 
+from preprocessing.dask.local_dask_cluster import LocalDaskCluster
 from preprocessing.logging.aws_logger import aws_logger
+from preprocessing.stages.create_local_dask_cluster import CreateLocalDaskCluster
 from preprocessing.stages.download_pdfs_for_legal_acts_rows import DownloadPdfsForLegalActsRows
 from preprocessing.stages.download_raw_rows_for_each_year import DownloadRawRowsForEachYear
 from preprocessing.stages.establish_legal_act_segments_boundaries import EstablishLegalActSegmentsBoundaries
@@ -42,7 +44,7 @@ from preprocessing.stages.line_division import LegalActLineDivision
 from preprocessing.stages.update_dask_cluster_workers import UpdateDaskClusterWorkers
 from preprocessing.utils.stages_objects import EstablishLegalActSegmentsBoundariesResult, \
     EstablishLegalWithTablesResult
-from preprocessing.stages.create_dask_cluster import CreateDaskCluster
+from preprocessing.stages.create_dask_cluster import CreateRemoteDaskCluster
 from preprocessing.stages.start_dag import StartDag
 from preprocessing.utils.attachments_extraction import AttachmentRegion, \
     get_pages_with_attachments
@@ -54,7 +56,8 @@ from preprocessing.utils.dynamodb_helper import meta_DULegalDocumentsMetaDataCha
     meta_DULegalDocumentsMetaData_with_s3_path
 from preprocessing.mongo_db.mongodb import get_mongodb_collection
 from preprocessing.mongo_db.mongodb_schema import schema_for_legal_act_row
-from preprocessing.utils.page_regions import LegalActPageRegionParagraphs, LegalActPageRegion, LegalActPageRegionTableRegion, \
+from preprocessing.utils.page_regions import LegalActPageRegionParagraphs, LegalActPageRegion, \
+    LegalActPageRegionTableRegion, \
     TableRegion
 from preprocessing.utils.s3_helper import extract_bucket_and_key
 from preprocessing.utils.sns_helper import send_sns_email
@@ -1097,12 +1100,8 @@ class PassageSplitter(TextChangesPiecesSplitter):
         return passage_text.replace('§', 'ust.')
 
 
-
 class MultiLineTextLLMObject(BaseModel):
     text: str
-
-
-
 
 
 class PassageTemp:
@@ -1616,8 +1615,6 @@ def preprocessing_api():
 
     # path_to_parquet_for_legal_documents_with_s3_pdf = 's3://datalake-bucket-123/stages/$693770a1-3055-424b-913d-4964e1e013ff/DownloadPdfsForLegalActsRows/results.parquet.gzip'
 
-
-
     # TODO UNCOMMENT THIS STAGE LATER
     # path_to_parquet_pages_boundaries = EstablishLegalActSegmentsBoundaries.run(flow_information=flow_information,
     #                                                                            dask_client=client,
@@ -1628,15 +1625,11 @@ def preprocessing_api():
 
     path_to_parquet_pages_boundaries = 's3://datalake-bucket-123/stages/$72f213ee-7227-4e99-96f0-63a5766ed1d8/EstablishLegalActSegmentsBoundaries/results.parquet.gzip'
 
-
     # TODO UNCOMMENT THIS STAGE LATER
     # path_to_parquet_line_divisions = LegalActLineDivision.run(flow_information=flow_information, dask_client=client, workers_count=8,
     #                                s3_path_parquet_with_eli_documents=path_to_parquet_pages_boundaries)
 
-
     path_to_parquet_line_divisions = 's3://datalake-bucket-123/stages/$99be0778-14a7-45f8-9eac-5283278dc945/LegalActLineDivision/results.parquet.gzip'
-
-
 
     path_to_parquet_legal_parts = EstablishPartsOfLegalActs.run(
         flow_information=flow_information, dask_client=client, workers_count=8,
@@ -1647,15 +1640,15 @@ def preprocessing_api():
 
     r = 4
 
-# path_with_rows_with_established_tables_and_equations = ExtractTableAndEquationsFromLegalActs.run(
-#     flow_information=flow_information,
-#     dask_client=client,
-#     workers_count=dask_cluster.get_workers_count(),
-#     # workers_count=3,
-#     datalake=datalake,
-#     s3_path_parquet_with_eli_documents=path_to_parquet_pages_boundaries
-#
-# )
+    # path_with_rows_with_established_tables_and_equations = ExtractTableAndEquationsFromLegalActs.run(
+    #     flow_information=flow_information,
+    #     dask_client=client,
+    #     workers_count=dask_cluster.get_workers_count(),
+    #     # workers_count=3,
+    #     datalake=datalake,
+    #     s3_path_parquet_with_eli_documents=path_to_parquet_pages_boundaries
+    #
+    # )
 
     path_to_eli_documents_with_extracted_text = ExtractTextAndGetPagesWithTables.run(flow_information=flow_information,
                                                                                      dask_client=client,
@@ -1755,6 +1748,8 @@ def preprocessing_api():
 
 
 log = logging.getLogger(__name__)
+
+
 @flow
 def for_the_running_without_debugging(local_cluster: bool = True):
     flow_run_context = get_run_context()
@@ -1767,28 +1762,34 @@ def for_the_running_without_debugging(local_cluster: bool = True):
     CLUSTER_NAME = f'Fargate-Dask-Cluster-{flow_run.name}'
     WORKERS_SERVICE = "Dask-Workers"
 
-    dask_cluster = CreateDaskCluster.run(
-        stack_name=STACK_NAME,
-        cluster_name=CLUSTER_NAME,
-        workers_service_name=WORKERS_SERVICE,
-        flow_run_id=flow_run.id,
-        flow_run_name=flow_run.name,
-        cluster_props={
-            "EnableScaling": "false",
-            "MemoryCapacity": "8192",
-            "CpuCapacity": '4096'
-        }
-    )
+    if local_cluster:
 
-    dask_cluster = UpdateDaskClusterWorkers.run(
-        dask_cluster=dask_cluster,
-        desired_count=20
-    )
+        dask_cluster = CreateLocalDaskCluster.run(
+            num_workers=3
+        )
 
+    else:
+        dask_cluster = CreateRemoteDaskCluster.run(
+            stack_name=STACK_NAME,
+            cluster_name=CLUSTER_NAME,
+            workers_service_name=WORKERS_SERVICE,
+            flow_run_id=flow_run.id,
+            flow_run_name=flow_run.name,
+            cluster_props={
+                "EnableScaling": "false",
+                "MemoryCapacity": "8192",
+                "CpuCapacity": '4096'
+            }
+        )
+
+        dask_cluster = UpdateDaskClusterWorkers.run(
+            dask_cluster=dask_cluster,
+            desired_count=20
+        )
 
     dask_workers_count = dask_cluster.get_workers_count()
 
-    client = Client(dask_cluster.cluster_url)
+    client = Client(dask_cluster.get_cluster_url())
 
     ## STEP 1
     path_to_raw_rows = DownloadRawRowsForEachYear.run(flow_information=flow_information, dask_client=client,
@@ -1828,8 +1829,9 @@ def for_the_running_without_debugging(local_cluster: bool = True):
                                                                                s3_path_parquet_with_legal_document_rows=path_to_parquet_for_legal_documents_with_s3_pdf)
 
     ## STEP 7  heavy cost
-    path_to_parquet_line_divisions = LegalActLineDivision.run(flow_information=flow_information, dask_client=client, workers_count=dask_workers_count,
-                                   s3_path_parquet_with_eli_documents=path_to_parquet_pages_boundaries)
+    path_to_parquet_line_divisions = LegalActLineDivision.run(flow_information=flow_information, dask_client=client,
+                                                              workers_count=dask_workers_count,
+                                                              s3_path_parquet_with_eli_documents=path_to_parquet_pages_boundaries)
 
     print(path_to_parquet_line_divisions)
 
@@ -1844,7 +1846,6 @@ if __name__ == "__main__":
         for_the_running_without_debugging()
     except Exception:
         log.error("Remote error:\n%s", traceback.format_exc())
-
 
     # try:
     #     preprocessing_api()

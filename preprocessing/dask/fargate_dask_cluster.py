@@ -16,13 +16,14 @@ from botocore.exceptions import ClientError
 import dask.dataframe as dd
 from tqdm import tqdm
 
+from preprocessing.dask.dask_cluster import DaskCluster
 from preprocessing.utils.defaults import AWS_REGION, DAG_TABLE_ID
 from preprocessing.utils.general import timeit
 from preprocessing.utils.sensor import Sensor
 from preprocessing.utils.stage_def import get_storage_options_for_ddf_dask
 
 
-class FargateDaskCluster:
+class FargateDaskCluster(DaskCluster):
 
     def __init__(self, stack_name: str, cluster_name: str, workers_service_name: str,
                  cloudformation_client: BaseClient, ecs_client: BaseClient):
@@ -31,7 +32,9 @@ class FargateDaskCluster:
         self.workers_service_name = workers_service_name
         self.cloudformation_client = cloudformation_client
         self.ecs_client = ecs_client
-        self.cluster_url = self.get_stack_output_value("DaskSchedulerALBURL", stack_name, cloudformation_client)
+
+    def get_cluster_url(self) -> str:
+        return self.get_stack_output_value("DaskSchedulerALBURL", self.stack_name, self.cloudformation_client)
 
     @classmethod
     def build(cls, stack_name: str, cluster_name: str, workers_service_name: str, flow_run_id: uuid,

@@ -1,0 +1,142 @@
+version: "3.3"
+
+services:
+
+
+  redis:
+    image: bitnami/redis:latest
+    hostname: redis
+    environment:
+      - REDIS_PASSWORD=redis
+    expose:
+      - 6379
+    ports:
+      - 6379:6379
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  scheduler:
+    image: 767427092061.dkr.ecr.eu-west-1.amazonaws.com/dask-image:latest
+    hostname: dask-scheduler
+    environment:
+      - FILES_PATH=/files
+      - REDIS_DOMAIN=redis
+      - REDIS_PASSWORD=redis
+    depends_on:
+      - redis
+    ports:
+      - 8786:8786
+      - 8787:8787
+    command: ["dask-scheduler"]
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8787/status" ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  worker:
+    image: 767427092061.dkr.ecr.eu-west-1.amazonaws.com/dask-image:latest
+    depends_on:
+      scheduler:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8789/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    environment:
+      - FILES_PATH=/files
+      - REDIS_DOMAIN=redis
+      - REDIS_PASSWORD=redis
+    command: ["dask-worker", "tcp://dask-scheduler:8786", "--dashboard-address", ":8789"]
+#
+#  worker-2:
+#    image: 767427092061.dkr.ecr.eu-west-1.amazonaws.com/dask-image:latest
+#    depends_on:
+#      scheduler:
+#        condition: service_healthy
+#      redis:
+#        condition: service_healthy
+#    environment:
+#      - FILES_PATH=/files
+#      - REDIS_DOMAIN=redis
+#      - REDIS_PASSWORD=redis
+#    command: ["dask-worker", "tcp://dask-scheduler:8786"]
+#
+#  worker-3:
+#    image: 767427092061.dkr.ecr.eu-west-1.amazonaws.com/dask-image:latest
+#    depends_on:
+#      scheduler:
+#        condition: service_healthy
+#      redis:
+#        condition: service_healthy
+#    environment:
+#      - FILES_PATH=/files
+#      - REDIS_DOMAIN=redis
+#      - REDIS_PASSWORD=redis
+#    command: [ "dask-worker", "tcp://dask-scheduler:8786" ]
+#  worker-4:
+#      image: 767427092061.dkr.ecr.eu-west-1.amazonaws.com/dask-image:latest
+#      depends_on:
+#        scheduler:
+#          condition: service_healthy
+#        redis:
+#          condition: service_healthy
+#      environment:
+#        - FILES_PATH=/files
+#        - REDIS_DOMAIN=redis
+#        - REDIS_PASSWORD=redis
+#      command: [ "dask-worker", "tcp://dask-scheduler:8786" ]
+#  worker-5:
+#      image: 767427092061.dkr.ecr.eu-west-1.amazonaws.com/dask-image:latest
+#      depends_on:
+#        scheduler:
+#          condition: service_healthy
+#        redis:
+#          condition: service_healthy
+#      environment:
+#        - FILES_PATH=/files
+#        - REDIS_DOMAIN=redis
+#        - REDIS_PASSWORD=redis
+#      command: [ "dask-worker", "tcp://dask-scheduler:8786" ]
+#  worker-6:
+#      image: 767427092061.dkr.ecr.eu-west-1.amazonaws.com/dask-image:latest
+#      depends_on:
+#        scheduler:
+#          condition: service_healthy
+#        redis:
+#          condition: service_healthy
+#      environment:
+#        - FILES_PATH=/files
+#        - REDIS_DOMAIN=redis
+#        - REDIS_PASSWORD=redis
+#      command: [ "dask-worker", "tcp://dask-scheduler:8786" ]
+#  worker-7:
+#    image: 767427092061.dkr.ecr.eu-west-1.amazonaws.com/dask-image:latest
+#    depends_on:
+#      scheduler:
+#        condition: service_healthy
+#      redis:
+#        condition: service_healthy
+#    environment:
+#      - FILES_PATH=/files
+#      - REDIS_DOMAIN=redis
+#      - REDIS_PASSWORD=redis
+#    command: [ "dask-worker", "tcp://dask-scheduler:8786" ]
+#  worker-8:
+#    image: 767427092061.dkr.ecr.eu-west-1.amazonaws.com/dask-image:latest
+#    depends_on:
+#      scheduler:
+#        condition: service_healthy
+#      redis:
+#        condition: service_healthy
+#    environment:
+#      - FILES_PATH=/files
+#      - REDIS_DOMAIN=redis
+#      - REDIS_PASSWORD=redis
+#    command: [ "dask-worker", "tcp://dask-scheduler:8786" ]
