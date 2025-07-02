@@ -1,9 +1,17 @@
 import base64
+import string
+import sys
+import threading
+
+from distributed import get_worker
+from dotenv import load_dotenv
 import gc
 import io
 import os
+# import s3fs
 import re
 import time
+import traceback
 from abc import ABC, abstractmethod
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
@@ -31,13 +39,20 @@ from pymongo.server_api import ServerApi
 from dask.distributed import Client, as_completed
 
 from prefect import flow
+
 from prefect.context import get_run_context
 from tqdm import tqdm
 
+from preprocessing.logging.aws_logger import aws_logger
+from preprocessing.pdf_boundaries.boundaries import BoundariesArea
+from preprocessing.pdf_boundaries.footer_boundaries import LegalActFooterArea
 from preprocessing.pdf_boundaries.margin_boundaries import LegalActMarginArea
 from preprocessing.pdf_boundaries.paragraph_boundaries import LegalActParagraphArea, ParagraphAreaType
+from preprocessing.pdf_elements.chars import CharLegalAct
 from preprocessing.pdf_elements.lines import TableRegionPageLegalAct, OrderedObjectLegalAct, TextLinePageLegalAct
+from preprocessing.pdf_utils.area_text_extractor import PageAreaTextExtractor
 from preprocessing.pdf_utils.multiline_extractor import MultiLineTextExtractor
+from preprocessing.pdf_utils.table_utils import TableDetector
 from preprocessing.stages.download_pdfs_for_legal_acts_rows import DownloadPdfsForLegalActsRows
 from preprocessing.stages.download_raw_rows_for_each_year import DownloadRawRowsForEachYear
 from preprocessing.stages.establish_legal_act_segments_boundaries import EstablishLegalActSegmentsBoundaries
@@ -47,6 +62,7 @@ from preprocessing.stages.get_existing_dask_cluster import GetExistingDaskCluste
 from preprocessing.stages.get_metadatachange_and_filter_legal_documents_which_not_change import \
     GetMetaDataChangeAndFilterLegalDocumentsWhichNotChange
 from preprocessing.stages.get_rows_of_legal_acts_for_preprocessing import GetRowsOfLegalActsForPreprocessing
+from preprocessing.stages.line_division import LegalActLineDivision
 from preprocessing.stages.update_dask_cluster_workers import UpdateDaskClusterWorkers
 from preprocessing.utils.stages_objects import EstablishLegalActSegmentsBoundariesResult, \
     EstablishLegalWithTablesResult, GeneralInfo
@@ -79,13 +95,19 @@ from pdf2image import convert_from_bytes
 import logging
 from cloudwatch import cloudwatch
 
-logger = logging.getLogger()
+load_dotenv()
 
-logger.setLevel(logging.INFO)
+logger = aws_logger
 
 os.environ['TZ'] = 'UTC'
 
+r = os.environ
+
 get_versions()
+
+import dask
+
+s = 4
 
 
 # messages = [
@@ -212,69 +234,6 @@ found_annotation_and_labeled_table_schema = {
         }
     }
 }
-
-
-def get_mongodb_collection(db_name, collection_name):
-    ## localhost
-    # uri = "mongodb+srv://superUser:awglm12345@serverlessinstance0.vxbabj8.mongodb.net/?retryWrites=true&w=majority&appName=ServerlessInstance0"
-    uri = "mongodb+srv://superUser:awglm12345@serverlessinstance0.vxbabj8.mongodb.net/?retryWrites=true&w=majority&appName=ServerlessInstance0"
-    # r = 'mongodb+srv://superUser:awglm12345@serverlessinstance0.vxbabj8.mongodb.net/'
-
-    # uri = "mongodb+srv://superUser:awglm12345@serverlessinstance0-pe-1.vxbabj8.mongodb.net/"
-
-    mongo_client = MongoClient(uri)
-    mongo_db = mongo_client[db_name]
-    if db_name == "preprocessing_legal_acts_texts":
-        if collection_name == "extract_text_and_table_page_number_stage":
-            return MongodbCollection(
-                collection_name=collection_name,
-                db_instance=mongo_db,
-                collection_schema=extract_text_and_table_page_number_stage_schema,
-                indexes=[
-                    MongodbCollectionIndex([("expires_at", ASCENDING)], expireAfterSeconds=0),
-                    MongodbCollectionIndex([("general_info.ELI", ASCENDING), ("invoke_id", ASCENDING)], unique=True)
-                ]
-            )
-        elif collection_name == "find_annotation_and_label_table_stage":
-            return MongodbCollection(
-                collection_name=collection_name,
-                db_instance=mongo_db,
-                collection_schema=found_annotation_and_labeled_table_schema,
-                indexes=[
-                    MongodbCollectionIndex([("expires_at", ASCENDING)], expireAfterSeconds=0),
-                    MongodbCollectionIndex([("general_info.ELI", ASCENDING), ("invoke_id", ASCENDING)], unique=True)
-                ]
-            )
-        elif collection_name == "define_legal_act_pages_boundaries_stage":
-            return MongodbCollection(
-                collection_name=collection_name,
-                db_instance=mongo_db,
-                collection_schema=define_legal_act_pages_boundaries_stage_schema,
-                indexes=[
-                    MongodbCollectionIndex([("expires_at", ASCENDING)], expireAfterSeconds=0),
-                    MongodbCollectionIndex([("general_info.ELI", ASCENDING), ("invoke_id", ASCENDING)], unique=True)
-                ]
-            )
-        elif collection_name == "legal_act_boundaries_with_tables_stage":
-            return MongodbCollection(
-                collection_name=collection_name,
-                db_instance=mongo_db,
-                collection_schema=legal_act_boundaries_with_tables_stage_schema,
-                indexes=[
-                    MongodbCollectionIndex([("expires_at", ASCENDING)], expireAfterSeconds=0),
-                    MongodbCollectionIndex([("general_info.ELI", ASCENDING), ("invoke_id", ASCENDING)], unique=True)
-                ]
-            )
-        elif collection_name == 'legal_act_page_metadata':
-            return MongodbCollection(
-                collection_name=collection_name,
-                db_instance=mongo_db,
-                indexes=[
-                    MongodbCollectionIndex([("expires_at", ASCENDING)], expireAfterSeconds=0),
-                    MongodbCollectionIndex([("general_info.ELI", ASCENDING), ("invoke_id", ASCENDING), ("page.page_number", ASCENDING)], unique=True)
-                ]
-            )
-    raise Exception("Invalid db_name or collection_name Mongodb error")
 
 
 def get_cloudwatch_logger(step_name, flow_information):
@@ -1169,487 +1128,12 @@ class PassageSplitter(TextChangesPiecesSplitter):
         return passage_text.replace('§', 'ust.')
 
 
-## TODO remove this class just leave lines and methods of this class
-class LegalActPage(MongodbObject):
-    LINE_DELIMITER = ' \n'
-
-    ## TODO check this quit well example D20220974Lj
-    def __init__(self, page_number: int, paragraph_lines: List[OrderedObjectLegalAct],
-                 footer_lines: List[OrderedObjectLegalAct], margin_lines: List[OrderedObjectLegalAct]):
-        self.page_number = page_number
-        self.paragraph_lines = paragraph_lines
-        self.footer_lines = footer_lines
-        self.margin_lines = margin_lines
-
-    @property
-    def len_paragraph_lines(self):
-        return self.get_len_of_lines(self.paragraph_lines)
-
-    @property
-    def len_footer_lines(self):
-        return self.get_len_of_lines(self.footer_lines)
-
-    @property
-    def len_margin_lines(self):
-        return self.get_len_of_lines(self.margin_lines)
-
-    @property
-    def get_table_lines(self) -> List[TableRegionPageLegalAct]:
-        return [line for line in self.paragraph_lines if isinstance(line, TableRegionPageLegalAct)]
-
-    @staticmethod
-    def get_len_of_lines(lines: List[OrderedObjectLegalAct]):
-        return sum(len(line) + len(LegalActPage.LINE_DELIMITER) for line in lines)
-
-    def to_dict(self):
-        return {
-            "page_number": self.page_number,
-            "paragraph_lines": [line.to_dict() for line in self.paragraph_lines],
-            "footer_lines": [line.to_dict() for line in self.footer_lines],
-            "margin_lines": [line.to_dict() for line in self.margin_lines]
-        }
-
-    @classmethod
-    def from_dict(cls, dict_object: Mapping[str, Any]):
-        return cls(
-            page_number=dict_object["page_number"],
-            paragraph_lines=[OrderedObjectLegalAct.from_dict(line) for line in dict_object["paragraph_lines"]],
-            footer_lines=[OrderedObjectLegalAct.from_dict(line) for line in dict_object["footer_lines"]],
-            margin_lines=[OrderedObjectLegalAct.from_dict(line) for line in dict_object["margin_lines"]]
-        )
-
-    # TODO use this for saving attachments as pdf
-    # @classmethod
-    # def crop_region_to_image(cls, pdf_content: io.BytesIO, line_dict: Dict[str, Any], page_pdfplumber: pdfplumber.pdf.Page):
-    #     pdf_reader = PdfFileReader(pdf_content)
-    #     pdf_writer = PdfFileWriter()
-    #
-    #
-    #     page_pypdf2 = pdf_reader.getPage(page_pdfplumber.page_number-1)
-    #
-    #     page_width = page_pypdf2.mediaBox.getUpperRight_x() - page_pypdf2.mediaBox.getLowerLeft_x()
-    #
-    #     page_height = page_pypdf2.mediaBox.getUpperRight_y() - page_pypdf2.mediaBox.getLowerLeft_y()
-    #
-    #
-    #     adjusted_y_start = page_pdfplumber.height - line_dict['top']  # Flip y-axis for PyPDF2
-    #     adjusted_y_end = page_pdfplumber.height - line_dict['bottom']   # Flip y-axis for PyPDF2
-    #
-    #     # adjusted_start_y = page_height - start_y + padding if page_num == start_page and start_y > navbar_y else page_height - navbar_y + 3 * padding
-    #     # adjusted_end_y = page_height - end_y if page_num == end_page and end_y < footer_y else page_height - footer_y - padding
-    #
-    #     page_pypdf2.mediaBox.upperRight = (line_dict['x1'], adjusted_y_end)
-    #     page_pypdf2.mediaBox.lowerLeft = (line_dict['x0'],  adjusted_y_start)
-    #
-    #     # Add the cropped page to the new PDF
-    #     pdf_writer.addPage(page_pypdf2)
-    #
-    #     with open("lines_2/rr.pdf", "wb") as output_file:
-    #         pdf_writer.write(output_file)
-
-    @classmethod
-    def merge_dict_text_line(cls, current_text_dict_line: Dict[str, Any],
-                             prev_text_dict_line: Dict[str, Any],
-                             page: pdfplumber.pdf.Page) -> Dict[str, Any]:
-        current_number = max([char['num_line'] for char in prev_text_dict_line['chars']])
-        current_text_dict_line['chars'] = [{**char, 'num_line': current_number + 1} for char in
-                                           current_text_dict_line['chars']]
-        prev_text_dict_line['chars'].extend(current_text_dict_line['chars'])
-        prev_text_dict_line['chars'] = sorted(prev_text_dict_line['chars'], key=lambda c: c['x0'])
-        prev_text_dict_line['top'] = min(prev_text_dict_line['top'], current_text_dict_line['top'])
-        prev_text_dict_line['bottom'] = max(prev_text_dict_line['bottom'], current_text_dict_line['bottom'])
-        prev_text_dict_line['x0'] = min(prev_text_dict_line['x0'], current_text_dict_line['x0'])
-        prev_text_dict_line['x1'] = max(prev_text_dict_line['x1'], current_text_dict_line['x1'])
-        bbox = (
-            prev_text_dict_line['x0'], prev_text_dict_line['top'], prev_text_dict_line['x1'],
-            prev_text_dict_line['bottom'])
-        prev_text_dict_line["text"] = page.within_bbox(bbox).extract_text()
-        prev_text_dict_line['merged'] = True
-        return prev_text_dict_line
-
-    @classmethod
-    def create_lines_of_specific_area(cls, document_id: str,
-                                      bbox_area: Tuple[float, float, float, float],
-                                      current_index_of_page: int,
-                                      page: pdfplumber.pdf.Page,
-                                      multiline_llm_extractor: MultiLineTextExtractor
-                                      ) -> List[TextLinePageLegalAct]:
-        text_lines_paragraph_region = page.within_bbox(bbox_area).extract_text_lines()
-        text_lines = [
-            {
-                **line,
-                'merged': False,
-                'chars': [{**char, 'num_line': 1} for char in line['chars']]
-            }
-            for line in sorted(text_lines_paragraph_region, key=lambda x: x['top'])
-        ]
-        lines_dict_list = []
-        line_obj_list = []
-        current_index = current_index_of_page
-        for current_text_dict_line in text_lines:
-            if not lines_dict_list:
-                lines_dict_list.append(current_text_dict_line)
-            elif current_text_dict_line['top'] <= lines_dict_list[-1]['bottom'] and current_text_dict_line[
-                'bottom'] >= lines_dict_list[-1]['top']:
-                lines_dict_list[-1] = cls.merge_dict_text_line(
-                    current_text_dict_line=current_text_dict_line,
-                    prev_text_dict_line=lines_dict_list[-1],
-                    page=page
-                )
-            else:
-
-                ## TODO here i got weird error of end_index sequence item 84: expected str instance, NoneType found
-                line_obj = (
-                    TextLinePageLegalAct.build_using_multi_line(
-                        document_id=document_id,
-                        line_dict=lines_dict_list[-1],
-                        page=page,
-                        current_index=current_index,
-                        current_line_on_page=len(line_obj_list),
-                        multiline_llm_extractor=multiline_llm_extractor
-                    ) if lines_dict_list[-1]['merged'] else
-                    TextLinePageLegalAct.build_using_single_line(
-                        line_dict=lines_dict_list[-1],
-                        current_index=current_index,
-                        page=page
-                    )
-                )
-                w = line_obj.text
-                current_index += len(line_obj) + len(cls.LINE_DELIMITER)
-                line_obj_list.append(line_obj)
-                lines_dict_list.append(current_text_dict_line)
-        if lines_dict_list:
-            line_obj = (
-                TextLinePageLegalAct.build_using_multi_line(
-                    document_id=document_id,
-                    line_dict=lines_dict_list[-1],
-                    page=page,
-                    current_index=current_index,
-                    current_line_on_page=len(line_obj_list),
-                    multiline_llm_extractor=multiline_llm_extractor
-                ) if lines_dict_list[-1]['merged'] else
-                TextLinePageLegalAct.build_using_single_line(
-                    line_dict=lines_dict_list[-1],
-                    current_index=current_index,
-                    page=page
-                )
-            )
-            current_index += len(line_obj) + len(cls.LINE_DELIMITER)
-            line_obj_list.append(line_obj)
-
-        return line_obj_list
-
-    @classmethod
-    def build(cls, page: pdfplumber.pdf.Page,
-              document_id: str,
-              paragraph_areas: List[LegalActParagraphArea],
-              margin_areas: List[LegalActMarginArea],
-              footer_area: LegalActPageRegionFooterNotes,
-              current_index_of_legal_act: int, current_table_number: int,
-              current_index_of_footer_legal_act: int,
-              current_index_of_margin_legal_act: int,
-              multiline_llm_extractor: MultiLineTextExtractor) -> 'LegalActPage':
-        paragraph_lines: List[OrderedObjectLegalAct] = []
-        footer_lines: List[OrderedObjectLegalAct] = []
-        margin_lines: List[OrderedObjectLegalAct] = []
-        current_index_of_page = current_index_of_legal_act
-        current_table_number_on_page = current_table_number
-        if footer_area:
-            footer_lines = cls.create_lines_of_specific_area(
-                document_id=document_id,
-                bbox_area=footer_area.bbox,
-                current_index_of_page=current_index_of_footer_legal_act,
-                page=page,
-                multiline_llm_extractor=multiline_llm_extractor
-            )
-            # kk = cls.get_len_of_lines(footer_lines)
-            # final_text_of_footer = ''
-            # for line_obj in footer_lines:
-            #     text_line = line_obj.text
-            #     final_text_of_footer += text_line + cls.LINE_DELIMITER
-            #
-            # # footer_lines = page.within_bbox(footer_area.bbox).extract_text_lines()
-            # rr = page.within_bbox(footer_area.bbox).extract_text()
-            #
-            # w = 4
-        # else:
-        #     nie_ma = 444
-        current_index_of_margin = current_index_of_margin_legal_act
-        for margin_area in margin_areas:
-            margin_lines_region = cls.create_lines_of_specific_area(
-                document_id=document_id,
-                bbox_area=margin_area.bbox,
-                current_index_of_page=current_index_of_margin,
-                page=page,
-                multiline_llm_extractor=multiline_llm_extractor
-            )
-            current_index_of_margin += cls.get_len_of_lines(margin_lines_region)
-            margin_lines.extend(margin_lines_region)
-        # final_text_of_margin = ''
-        # for line_obj in margin_lines:
-        #     text_line = line_obj.text
-        #     final_text_of_margin += text_line + cls.LINE_DELIMITER
-        #
-        # wwww =4
-        for paragraph_area in paragraph_areas:
-            if paragraph_area.area_type == ParagraphAreaType.TABLE:
-                table_region = TableRegionPageLegalAct(
-                    start_x=paragraph_area.start_x,
-                    end_x=paragraph_area.end_x,
-                    start_y=paragraph_area.start_y,
-                    end_y=paragraph_area.end_y,
-                    page_number=page.page_number,
-                    start_index_in_act=current_index_of_page,
-                    table_number=current_table_number_on_page
-                )
-                current_table_number_on_page += 1
-                current_index_of_page += len(table_region) + len(cls.LINE_DELIMITER)
-                paragraph_lines.append(table_region)
-            else:
-                paragraph_text_lines_region = cls.create_lines_of_specific_area(
-                    document_id=document_id,
-                    bbox_area=paragraph_area.bbox,
-                    current_index_of_page=current_index_of_page,
-                    page=page,
-                    multiline_llm_extractor=multiline_llm_extractor
-                )
-                current_index_of_page += cls.get_len_of_lines(paragraph_text_lines_region)
-                paragraph_lines.extend(paragraph_text_lines_region)
-        #
-        # final_text_of_page = ''
-        # for line_obj in paragraph_lines:
-        #     text_line = line_obj.text
-        #     final_text_of_page += text_line + cls.LINE_DELIMITER
-        #
-        # miau = 4
-
-        return cls(
-            page_number=page.page_number,
-            paragraph_lines=paragraph_lines,
-            footer_lines=footer_lines,
-            margin_lines=margin_lines
-        )
-
 
 class MultiLineTextLLMObject(BaseModel):
     text: str
 
 
-class LegalActPageMetadata(MongodbObject):
 
-    def to_dict(self):
-        return {
-            "general_info": GeneralInfo.to_dict(self.general_info),
-            "invoke_id": self.invoke_id,
-            "page": LegalActPage.to_dict(self.page),
-            "expires_at": self.expires_at
-        }
-
-    @classmethod
-    def from_dict(cls, dict_object: Mapping[str, Any]):
-        return cls(
-            general_info=GeneralInfo.from_dict(dict_object['general_info']),
-            invoke_id=dict_object['invoke_id'],
-            page=LegalActPage.from_dict(dict_object['page']),
-            expires_at=dict_object['expires_at']
-        )
-
-    def __init__(self, general_info: GeneralInfo, invoke_id: str, page: LegalActPage,
-                 expires_at: datetime):
-        self.general_info = general_info
-        self.invoke_id = invoke_id
-        self.page = page
-        self.expires_at = expires_at
-
-
-class LegalActLineDivision(FlowStep):
-
-    @classmethod
-    def get_footer_region_of_page(cls, footer_notes: List[LegalActPageRegionFooterNotes], page: pdfplumber.pdf.Page) \
-            -> LegalActPageRegionFooterNotes:
-        footer_note_match = [element for element in footer_notes if element.page_number == page.page_number]
-        return footer_note_match[0] if footer_note_match else None
-
-    @classmethod
-    def get_margin_notes_region_of_page(cls, margin_notes: List[LegalActPageRegionMarginNotes],
-                                        page: pdfplumber.pdf.Page) \
-            -> LegalActPageRegionMarginNotes:
-        return [element for element in margin_notes if element.page_number == page.page_number][0]
-
-    @classmethod
-    def create_pages(cls, document_id: str, page_regions: PageRegions, pdf_content: io.BytesIO) -> List[LegalActPage]:
-        multiline_text_extractor = MultiLineTextExtractor(max_retries=5)
-        index_of_document = 0
-        index_of_footer_document = 0
-        index_of_margin_document = 0
-        index_of_table = 1
-        pages = []
-        with pdfplumber.open(pdf_content) as pdf:
-            try:
-                for paragraph in page_regions.paragraphs:
-                    page = pdf.pages[paragraph.page_number - 1]
-
-                    paragraph_areas = LegalActParagraphArea.split_paragraph_into_areas(paragraph, page)
-
-                    margin = cls.get_margin_notes_region_of_page(page_regions.margin_notes, page)
-                    margin_areas = LegalActMarginArea.split_margin_notes_into_areas(paragraph, margin, page)
-
-                    legal_act_page = LegalActPage.build(
-                        page=page,
-                        document_id=document_id,
-                        paragraph_areas=paragraph_areas,
-                        margin_areas=margin_areas,
-                        footer_area=cls.get_footer_region_of_page(page_regions.footer_notes, page),
-                        current_index_of_legal_act=index_of_document,
-                        current_table_number=index_of_table,
-                        current_index_of_footer_legal_act=index_of_footer_document,
-                        current_index_of_margin_legal_act=index_of_margin_document,
-                        multiline_llm_extractor=multiline_text_extractor
-                    )
-                    index_of_document += legal_act_page.len_paragraph_lines
-                    index_of_table += len(legal_act_page.get_table_lines)
-                    index_of_footer_document += legal_act_page.len_footer_lines
-                    index_of_margin_document += legal_act_page.len_margin_lines
-                    pages.append(legal_act_page)
-                    page.flush_cache()
-                    page.get_textmap.cache_clear()
-
-                    del page
-            finally:
-                pdf.close()
-        return pages
-
-    @classmethod
-    @retry_dask_task(retries=3, delay=10)
-    def worker_task(cls, row: Dict[str, str]):
-        try:
-            row_with_details: EstablishLegalActSegmentsBoundariesResult = EstablishLegalActSegmentsBoundariesResult \
-                .from_dict(
-                get_mongodb_collection(
-                    db_name="preprocessing_legal_acts_texts",
-                    ## TODO change this later
-                    collection_name="define_legal_act_pages_boundaries_stage"
-                ).find_one(
-                    {
-                        "general_info.ELI": row['ELI'],
-                        # "invoke_id": row[DAG_TABLE_ID]
-                        # "invoke_id": row[DAG_TABLE_ID]
-                        "invoke_id": row["invoke_id"]
-                    },
-                    {"_id": 0}
-                )
-            )
-            bucket, key = extract_bucket_and_key(row_with_details.general_info.s3_pdf_path)
-            pdf_content = io.BytesIO(
-                boto3.client('s3', region_name=AWS_REGION).get_object(Bucket=bucket, Key=key)['Body'].read())
-
-            try:
-                pages = cls.create_pages(row['ELI'], row_with_details.page_regions, pdf_content)
-            except Exception as e:
-                ## TODO these files raise this error:
-                ## https://api.sejm.gov.pl/eli/acts/DU/1990/36/text/U/D19900036Lj.pdf
-                ## https://api.sejm.gov.pl/eli/acts/DU/2022/1967/text/U/D20221967Lj.pdf
-                raise RuntimeError(
-                    f"Error while processing PDF: {row_with_details.general_info.s3_pdf_path} "
-                    f"(ELI: {row_with_details.general_info.ELI}), error: {e}"
-                ) from e
-            pages_to_save = []
-
-            for page in pages:
-                pages_to_save.append(
-                    LegalActPageMetadata(
-                        general_info=row_with_details.general_info,
-                        page=page,
-                        invoke_id=row_with_details.invoke_id,
-                        expires_at=datetime.now() + timedelta(days=90)
-                    ).to_dict()
-                )
-
-            get_mongodb_collection(
-                db_name="preprocessing_legal_acts_texts",
-                collection_name="legal_act_page_metadata"
-            ).insert_many(pages_to_save)
-
-            ## TODO here is the result now i need cleanup and it will be ready to use to extract lines
-            # result: List[LegalActPageMetadata] = [
-            #     LegalActPageMetadata.from_dict(page_metadata)
-            #     for page_metadata in get_mongodb_collection(
-            #         db_name="preprocessing_legal_acts_texts",
-            #         collection_name="legal_act_page_metadata"
-            #     ).find_many(
-            #         {
-            #             "general_info.ELI": row['ELI'],
-            #             # "invoke_id": row[DAG_TABLE_ID]
-            #             "invoke_id": "a3412da8-b112-485d-911b-5ed94de9ae7f"
-            #         },
-            #         {"_id": 0}
-            #     )]
-            w = 4
-        finally:
-            gc.collect()
-        return row
-
-    @classmethod
-    @FlowStep.step(task_run_name='define_legal_acts_lines')
-    def run(cls, flow_information: dict, dask_client: Client, workers_count: int,
-            s3_path_parquet_with_eli_documents: str):
-
-        ddf_eli_documents = cls.read_from_datalake(s3_path_parquet_with_eli_documents,
-                                                   pd.DataFrame({
-                                                       'ELI': pd.Series(dtype='str'),
-                                                       'invoke_id': pd.Series(dtype='str')
-                                                   })
-                                                   )
-
-        # DU/2011/696
-
-        # selected_ddf = ddf_eli_documents[
-        #     ddf_eli_documents["ELI"] == "DU/2011/696"].compute()
-        # selected_ddf = ddf_eli_documents[
-        #     ddf_eli_documents["ELI"] == "DU/1990/36"].compute()
-        # selected_ddf = ddf_eli_documents[
-        #     ddf_eli_documents["ELI"] == "DU/1984/268"].compute()
-        # selected_ddf = ddf_eli_documents[
-        #     ddf_eli_documents["ELI"] == "DU/2022/974"].compute()
-
-        # selected_ddf = ddf_eli_documents[
-        #     ddf_eli_documents["ELI"] == "DU/1960/168"].compute()
-        #
-        # selected_ddf = ddf_eli_documents[
-        #     ddf_eli_documents["ELI"] == "DU/1985/60"].compute()
-        # selected_ddf = ddf_eli_documents[
-        #     ddf_eli_documents["ELI"] == "DU/1974/117"].compute()
-        # r = cls.worker_task(row=selected_ddf.iloc[0].to_dict())
-
-        delayed_tasks = ddf_eli_documents.map_partitions(
-            lambda df: [
-                delayed(cls.worker_task)(
-                    row=row
-                )
-                for row in df.to_dict(orient='records')
-            ]
-        ).compute()
-
-        flat_tasks = [task for sublist in delayed_tasks for task in sublist]
-
-        futures = dask_client.compute(flat_tasks, sync=False)
-
-        results = []
-        for future in tqdm(as_completed(futures), total=len(futures), desc=f"Downloading pdfs", unit="document",
-                           ncols=100):
-            result = future.result()  # Get the result of the completed task
-            results.append(result)
-
-        # Log worker information
-        for future in futures:
-            who_has = dask_client.who_has(future)
-            logger.info(f"Task {future.key} executed on workers: {who_has}")
-
-        result_df = pd.DataFrame(results)
-
-        results_ddf = dd.from_pandas(result_df, npartitions=workers_count)
-
-        return cls.save_result_to_datalake(results_ddf, flow_information, cls)
 
 
 class PassageTemp:
@@ -2069,27 +1553,27 @@ def preprocessing_api():
 
     R = 4
     ## TODO when we start flow define if stack name already exist, omit creation of stack
-    # dask_cluster = CreateDaskCluster.run(
-    #     stack_name=STACK_NAME,
-    #     cluster_name=CLUSTER_NAME,
-    #     workers_service_name=WORKERS_SERVICE,
-    #     flow_run_id=flow_run.id,
-    #     flow_run_name=flow_run.name,
-    #     cluster_props={
-    #         "EnableScaling": "false",
-    #         "MemoryCapacity": "8192",
-    #         "CpuCapacity": '4096'
-    #     }
-    # )
+    dask_cluster = CreateDaskCluster.run(
+        stack_name=STACK_NAME,
+        cluster_name=CLUSTER_NAME,
+        workers_service_name=WORKERS_SERVICE,
+        flow_run_id=flow_run.id,
+        flow_run_name=flow_run.name,
+        cluster_props={
+            "EnableScaling": "false",
+            "MemoryCapacity": "8192",
+            "CpuCapacity": '4096'
+        }
+    )
 
     datalake = Datalake(datalake_bucket=DATALAKE_BUCKET, aws_region=AWS_REGION)
 
-    # dask_cluster = GetExistingDaskCluster.run(stack_name="dask-stack-ab996695-51ee-4ded-a74a-f256293500c6")
+    # dask_cluster = GetExistingDaskCluster.run(stack_name='dask-stack-28429daf-bd4c-4232-95c3-99e530c9d694')
     # #
-    # dask_cluster = UpdateDaskClusterWorkers.run(
-    #     dask_cluster=dask_cluster,
-    #     desired_count=20
-    # )
+    dask_cluster = UpdateDaskClusterWorkers.run(
+        dask_cluster=dask_cluster,
+        desired_count=20
+    )
 
     # dask_cluster = RestartDaskClusterWorkers.run(
     #     dask_cluster=dask_cluster
@@ -2099,9 +1583,9 @@ def preprocessing_api():
 
     # dask_cluster = None
 
-    # client = Client(dask_cluster.cluster_url)
+    client = Client(dask_cluster.cluster_url)
     # client = Client('idealistic-manul-TCP-0cd4f6af06afc9d5.elb.eu-west-1.amazonaws.com:8786')
-    client = Client("tcp://localhost:8786")
+    # client = Client("tcp://localhost:8786")
 
     r = 4
     # client = Client("agile-beagle-TCP-671138ce4c7af57a.elb.eu-west-1.amazonaws.com:8786")
@@ -2109,8 +1593,8 @@ def preprocessing_api():
 
     # ss = download_raw_rows_for_each_year(flow_information=flow_information, dask_client=client, type_document="DU")
     # TODO UNCOMMENT THIS STAGE LATER
-    # path_to_raw_rows = DownloadRawRowsForEachYear.run(flow_information=flow_information, dask_client=client,
-    #                                                   type_document="DU")
+    path_to_raw_rows = DownloadRawRowsForEachYear.run(flow_information=flow_information, dask_client=client,
+                                                      type_document="DU")
 
     r = 4
     #
@@ -2118,25 +1602,27 @@ def preprocessing_api():
     path_to_raw_rows = 's3://datalake-bucket-123/api-sejm/a04e9d3d-1890-42cc-8cf5-3d190eb617c3/DU/*.parquet'
     # ## here we start new flow for test
     # TODO UNCOMMENT THIS STAGE LATER
-    # path_to_rows = GetRowsOfLegalActsForPreprocessing.run(flow_information=flow_information,
-    #                                                       dask_client=client,
-    #                                                       s3_path=path_to_raw_rows)
+    path_to_rows = GetRowsOfLegalActsForPreprocessing.run(flow_information=flow_information,
+                                                          dask_client=client,
+                                                          s3_path=path_to_raw_rows)
 
-    path_to_rows = 's3://datalake-bucket-123/stages/$049eec07-0322-4530-a135-f66719696ede/GetRowsOfLegalActsForPreprocessing/rows_filtered.parquet.gzip'
+    # path_to_rows = 's3://datalake-bucket-123/stages/$049eec07-0322-4530-a135-f66719696ede/GetRowsOfLegalActsForPreprocessing/rows_filtered.parquet.gzip'
 
     r = 4
     #
     # TODO UNCOMMENT THIS STAGE LATER
-    # path_DULegalDocumentsMetaData_rows = FilterRowsFromApiAndUploadToParquetForFurtherProcessing.run(
-    #     flow_information=flow_information,
-    #     dask_client=client,
-    #     workers_count=3,
-    #     s3_path_parquet=path_to_rows)
+    path_DULegalDocumentsMetaData_rows = FilterRowsFromApiAndUploadToParquetForFurtherProcessing.run(
+        flow_information=flow_information,
+        dask_client=client,
+        workers_count=3,
+        s3_path_parquet=path_to_rows)
 
-    R =4
+    R = 4
 
-    path_DULegalDocumentsMetaData_rows = 's3://datalake-bucket-123/stages/$869382c1-1b5b-4294-80f3-d94e090c1edf/FilterRowsFromApiAndUploadToParquetForFurtherProcessing/results.parquet.gzip'
+    # path_DULegalDocumentsMetaData_rows = 's3://datalake-bucket-123/stages/$869382c1-1b5b-4294-80f3-d94e090c1edf/FilterRowsFromApiAndUploadToParquetForFurtherProcessing/results.parquet.gzip'
     #
+    # new path to rows
+    path_DULegalDocumentsMetaData_rows = 's3://datalake-bucket-123/stages/$47146fc8-fb81-443f-b9c4-05ba5486e045/FilterRowsFromApiAndUploadToParquetForFurtherProcessing/results.parquet.gzip'
 
     # TODO UNCOMMENT THIS STAGE LATER
     # path_to_parquet_for_legal_documents, path_to_parquet_for_legal_documents_changes_lists = GetMetaDataChangeAndFilterLegalDocumentsWhichNotChange.run(
@@ -2148,8 +1634,8 @@ def preprocessing_api():
 
     r = 4
     #
-    path_to_parquet_for_legal_documents = 's3://datalake-bucket-123/stages/$a9239d0c-4b41-4939-a2d5-aae583a82363/GetMetaDataChangeAndFilterLegalDocumentsWhichNotChange/legal_documents.parquet.gzip'
-    path_to_parquet_for_legal_documents_changes_lists = 's3://datalake-bucket-123/stages/$a9239d0c-4b41-4939-a2d5-aae583a82363/GetMetaDataChangeAndFilterLegalDocumentsWhichNotChange/legal_documents_changes_lists.parquet.gzip'
+    # path_to_parquet_for_legal_documents = 's3://datalake-bucket-123/stages/$a9239d0c-4b41-4939-a2d5-aae583a82363/GetMetaDataChangeAndFilterLegalDocumentsWhichNotChange/legal_documents.parquet.gzip'
+    # path_to_parquet_for_legal_documents_changes_lists = 's3://datalake-bucket-123/stages/$a9239d0c-4b41-4939-a2d5-aae583a82363/GetMetaDataChangeAndFilterLegalDocumentsWhichNotChange/legal_documents_changes_lists.parquet.gzip'
 
     # TODO UNCOMMENT THIS STAGE LATER
     # path_to_parquet_for_legal_documents_with_s3_pdf = DownloadPdfsForLegalActsRows.run(
@@ -2159,23 +1645,8 @@ def preprocessing_api():
     #     s3_path_parquet=path_to_parquet_for_legal_documents
     # )
 
-    path_to_parquet_for_legal_documents_with_s3_pdf = 's3://datalake-bucket-123/stages/$693770a1-3055-424b-913d-4964e1e013ff/DownloadPdfsForLegalActsRows/results.parquet.gzip'
+    # path_to_parquet_for_legal_documents_with_s3_pdf = 's3://datalake-bucket-123/stages/$693770a1-3055-424b-913d-4964e1e013ff/DownloadPdfsForLegalActsRows/results.parquet.gzip'
 
-    r = 4
-
-    # CheckingFooter.run(flow_information=flow_information, dask_client=client, workers_count=2,
-    #                       s3_path_parquet_with_legal_document_rows=path_to_parquet_for_legal_documents_with_s3_pdf)
-
-    # path_to_parquet_for_legal_documents_with_s3_pdf = 's3://datalake-bucket-123/stages/extract-text-from-documents-with-pdfs/$74d77c70-0e2f-47d1-a98f-b56b4c181120/documents_with_pdfs.parquet.gzip'
-
-    # CheckingFOOTERType2.run(flow_information=flow_information, dask_client=client, workers_count=2,
-    #                         s3_path_parquet_with_legal_document_rows=path_to_parquet_for_legal_documents_with_s3_pdf)
-    #
-    # CheckingHeaderType2.run(flow_information=flow_information, dask_client=client, workers_count=2,
-    #                         s3_path_parquet_with_legal_document_rows=path_to_parquet_for_legal_documents_with_s3_pdf)
-
-    # CheckingFooter.run(flow_information=flow_information, dask_client=client, workers_count=2,
-    #                    s3_path_parquet_with_legal_document_rows=path_to_parquet_for_legal_documents_with_s3_pdf)
 
 
     # TODO UNCOMMENT THIS STAGE LATER
@@ -2188,31 +1659,39 @@ def preprocessing_api():
 
     path_to_parquet_pages_boundaries = 's3://datalake-bucket-123/stages/$72f213ee-7227-4e99-96f0-63a5766ed1d8/EstablishLegalActSegmentsBoundaries/results.parquet.gzip'
 
-    r = 4
+
+    # TODO UNCOMMENT THIS STAGE LATER
+    # path_to_parquet_line_divisions = LegalActLineDivision.run(flow_information=flow_information, dask_client=client, workers_count=8,
+    #                                s3_path_parquet_with_eli_documents=path_to_parquet_pages_boundaries)
 
 
-    # path_with_rows_with_established_tables_and_equations = ExtractTableAndEquationsFromLegalActs.run(
-    #     flow_information=flow_information,
-    #     dask_client=client,
-    #     workers_count=dask_cluster.get_workers_count(),
-    #     # workers_count=3,
-    #     datalake=datalake,
-    #     s3_path_parquet_with_eli_documents=path_to_parquet_pages_boundaries
-    #
-    # )
+    path_to_parquet_line_divisions = 's3://datalake-bucket-123/stages/$99be0778-14a7-45f8-9eac-5283278dc945/LegalActLineDivision/results.parquet.gzip'
 
-    # path_with_rows_with_established_tables_and_equations = 's3://datalake-bucket-123/stages/$9aa21043-923f-42fb-8f3c-3628aab3d0f6/ExtractTableAndEquationsFromLegalActs/results.parquet.gzip'
-    # path_with_rows_with_established_tables_and_equations = 's3://datalake-bucket-123/stages/$1da9d10e-3468-42dc-adb4-de30beff2960/ExtractTableAndEquationsFromLegalActs/results.parquet.gzip'
 
-    sss = LegalActLineDivision.run(flow_information=flow_information, dask_client=client, workers_count=8,
-                                   s3_path_parquet_with_eli_documents=path_to_parquet_pages_boundaries)
+
+    path_to_parquet_legal_parts = EstablishPartsOfLegalActs.run(
+        flow_information=flow_information, dask_client=client, workers_count=8,
+        s3_path_parquet_with_eli_documents=path_to_parquet_line_divisions
+    )
 
     s = 4
 
-    # path_to_eli_documents_with_extracted_text = ExtractTextAndGetPagesWithTables.run(flow_information=flow_information,
-    #                                                                                  dask_client=client,
-    #                                                                                  workers_count=dask_cluster.get_workers_count(),
-    #                                                                                  s3_path_parquet_with_legal_document_rows=path_to_parquet_for_legal_documents_with_s3_pdf)
+    r = 4
+
+# path_with_rows_with_established_tables_and_equations = ExtractTableAndEquationsFromLegalActs.run(
+#     flow_information=flow_information,
+#     dask_client=client,
+#     workers_count=dask_cluster.get_workers_count(),
+#     # workers_count=3,
+#     datalake=datalake,
+#     s3_path_parquet_with_eli_documents=path_to_parquet_pages_boundaries
+#
+# )
+
+    path_to_eli_documents_with_extracted_text = ExtractTextAndGetPagesWithTables.run(flow_information=flow_information,
+                                                                                     dask_client=client,
+                                                                                     workers_count=dask_cluster.get_workers_count(),
+                                                                                     s3_path_parquet_with_legal_document_rows=path_to_parquet_for_legal_documents_with_s3_pdf)
 
     # path_to_eli_documents_with_extracted_text = 's3://datalake-bucket-123/stages/$6129d63e-e933-4dcd-9f0a-a809c1cd7464/ExtractTextAndGetPagesWithTables/results.parquet.gzip'
 
@@ -2306,12 +1785,17 @@ def preprocessing_api():
     s = 4
 
 
+log = logging.getLogger(__name__)
+
 if __name__ == "__main__":
     # here we define flow
-    StartDag >> CreateDaskCluster
+    # StartDag.run() >> CreateDaskCluster
 
-    preprocessing_api()
-
+    try:
+        preprocessing_api()
+    except Exception:
+        log.error("Remote error:\n%s", traceback.format_exc())
+        raise  # ważne! żeby Prefect widział błąd
     cluster_name = 'Fargate-Dask-Cluster'  # Replace with your ECS cluster name
     service_name = 'Dask-Workers'  # Replace with your ECS service name
     # ecs_client = boto3.client('ecs', region_name='eu-west-1')

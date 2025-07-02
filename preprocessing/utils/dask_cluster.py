@@ -1,3 +1,4 @@
+import inspect
 import logging
 import time
 import uuid
@@ -355,11 +356,16 @@ def retry_dask_task(retries: int = 3, delay: int = 5):
     logger.setLevel(logging.INFO)
 
     def decorator(func):
+
+        sig = inspect.signature(func)
+        accepts_retry = "retry_attempt" in sig.parameters
         @wraps(func)
         def wrapper(*args, **kwargs):
             attempt = 0
             while attempt < retries:
                 try:
+                    if accepts_retry:
+                        kwargs["retry_attempt"] = attempt
                     return func(*args, **kwargs)
                 except Exception as e:
                     attempt += 1

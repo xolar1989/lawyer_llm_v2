@@ -1,7 +1,8 @@
-FROM daskdev/dask:2022.10.0
+FROM daskdev/dask:2022.10.0-py3.10
 
 
 ENV DEBIAN_FRONTEND=noninteractive
+
 
 RUN apt update && \
     apt install -y curl poppler-utils libgl1 libglib2.0-0 tzdata && \
@@ -31,6 +32,7 @@ COPY ./preprocessing /dask/preprocessing
 
 # Add the directory to the Python path so Dask workers can import it
 ENV PYTHONPATH="/dask/preprocessing:${PYTHONPATH}"
+ENV DASK_DATAFRAME__CONVERT_STRING=False
 
 
 

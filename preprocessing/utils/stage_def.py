@@ -1,6 +1,7 @@
 import logging
 import time
 from abc import ABCMeta
+from datetime import timedelta
 from functools import wraps
 from typing import Dict, Type
 
@@ -13,6 +14,8 @@ from prefect.context import TaskRun
 from prefect.states import State, Completed
 from prefect.states import Failed
 from cloudwatch import cloudwatch
+from prefect.tasks import task_input_hash
+from prefect.utilities.hashing import hash_objects
 
 from preprocessing.utils.defaults import AWS_REGION, DATALAKE_BUCKET, DAG_TABLE_ID
 
@@ -50,14 +53,34 @@ class FlowStep(metaclass=FlowMeta):
     _previous_step = None
     _next_step = None
 
+
+    @staticmethod
+    def custom_task_input_hash(context, arguments):
+        # Exclude problematic keys like 'flow_meta'
+        filtered_args = {k: v for k, v in arguments.items() if k != "flow_meta"}
+
+        try:
+            return hash_objects(
+                context.task.task_key,
+                context.task.fn.__code__.co_code.hex(),
+                filtered_args,
+            )
+        except Exception:
+            return None
+
     @staticmethod
     def step(task_run_name, **kwargs):
         """Combines FlowStep.handle_rollback, task, and classmethod"""
 
-        def on_completion_hook(task, task_run, state):
-            logger = get_run_logger()
-            if state.name == 'Completed':
-                logger.info(f"Task {task.task_run_name} completed successfully")
+        #
+        # cache_expiration = kwargs.pop(  # allow override
+        #     "cache_expiration", timedelta(days=7)
+        # )
+        #
+        # def on_completion_hook(task, task_run, state):
+        #     logger = get_run_logger()
+        #     if state.name == 'Completed':
+        #         logger.info(f"Task {task.task_run_name} completed successfully")
 
         def decorator(func):
             # Apply each decorator manually inside this combined decorator
@@ -66,8 +89,12 @@ class FlowStep(metaclass=FlowMeta):
                 func = FlowStep.handle_rollback(func, kwargs['retries'], attempt=attempt)  # Apply handle_rollback
             else:
                 func = FlowStep.handle_rollback(func)
-            func = task(task_run_name=task_run_name, on_completion=[on_completion_hook], **kwargs)(
-                func)  # Apply task with task_run_name
+            func = task(
+                task_run_name=task_run_name,
+                # on_completion=[on_completion_hook],
+                cache_key_fn=FlowStep.custom_task_input_hash,
+                # cache_expiration=cache_expiration,
+                **kwargs)(func)  # Apply task with task_run_name
             return func
 
         return decorator

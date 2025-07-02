@@ -4,7 +4,8 @@ from typing import List, Union, Tuple
 import pdfplumber
 from pdfplumber.table import Table
 
-from preprocessing.pdf_utils.table_utils import TableDetector
+from preprocessing.pdf_boundaries.boundaries import BoundariesArea
+from preprocessing.pdf_utils.table_utils import TableDetector, TableCoordinates
 from preprocessing.utils.page_regions import LegalActPageRegionParagraphs
 
 
@@ -13,33 +14,18 @@ class ParagraphAreaType(Enum):
     TABLE = 2
 
 
-class LegalActParagraphArea:
+class LegalActParagraphArea(BoundariesArea):
 
-    def __init__(self, start_x: float, end_x: float, start_y: float, end_y: float,
-                 page_number: int, area_type: ParagraphAreaType):
-        self.start_x = start_x
-        self.end_x = end_x
-        self.start_y = start_y
-        self.end_y = end_y
-        self.page_number = page_number
+    def __init__(self, start_x: float, end_x: float, start_y: float, end_y: float, page_number: int,
+                 area_type: ParagraphAreaType):
+        super().__init__(start_x, end_x, start_y, end_y, page_number)
         self.area_type = area_type
 
-    @property
-    def bbox(self):
-        return self.start_x, self.start_y, self.end_x, self.end_y
-
     @classmethod
-    def _is_there_area(cls, page: pdfplumber.pdf.Page, area_bbox: tuple) -> bool:
-        area = page.within_bbox(area_bbox)
-        area_text = area.extract_text().strip()
-        return bool(area_text)
-
-    @classmethod
-    def split_paragraph_into_areas(cls, paragraph: LegalActPageRegionParagraphs, page: pdfplumber.pdf.Page) -> List['LegalActParagraphArea']:
+    def split_into_areas(cls, paragraph: LegalActPageRegionParagraphs, page: pdfplumber.pdf.Page,
+                         tables_on_page: List[TableCoordinates]) -> List['LegalActParagraphArea']:
         current_start_y = paragraph.start_y
         current_end_y = paragraph.end_y
-
-        tables_on_page = TableDetector.extract(page, paragraph)
 
         areas: List['LegalActParagraphArea'] = []
         for table in tables_on_page:

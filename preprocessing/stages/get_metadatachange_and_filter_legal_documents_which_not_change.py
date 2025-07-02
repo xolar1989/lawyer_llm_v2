@@ -1,3 +1,5 @@
+import json
+from ast import literal_eval
 from datetime import datetime
 
 import numpy as np
@@ -42,14 +44,6 @@ class GetMetaDataChangeAndFilterLegalDocumentsWhichNotChange(FlowStep):
                 list_of_changes.append(act_of_change)
         return list_of_changes
 
-    @classmethod
-    def extract_act_info(cls, row):
-        acts = cls.process_acts(row, 'Akty zmieniające') + cls.process_acts(row, 'Inf. o tekście jednolitym') \
-               + cls.process_acts(row, 'Akty uchylające') + cls.process_acts(row,
-                                                                             'Uchylenia wynikające z')  ## to test this
-
-        return acts if acts else np.nan
-
     @staticmethod
     def explode_and_normalize_partition(df, columns_order):
         df_filtered_from_empty_references = df[df['call_result_list'].notna()]
@@ -58,9 +52,32 @@ class GetMetaDataChangeAndFilterLegalDocumentsWhichNotChange(FlowStep):
         df_final = pd.concat([df_exploded.drop(columns=['call_result_list', 'call_result']), df_normalized], axis=1)
         return df_final.reindex(columns=columns_order, fill_value=pd.NA)
 
+    @staticmethod
+    def call_api_per_partition(df):
+        df = df.copy()  # avoid SettingWithCopyWarning
+        df["call_result"] = df["ELI"].apply(
+            lambda eli: make_api_call(f"{SEJM_API_URL}/{eli}/references")
+        )
+        return df
+
+    @staticmethod
+    def get_references_list_for_each_document(df):
+        df = df.copy()  # avoid SettingWithCopyWarning
+        df['call_result_list'] = df.apply(GetMetaDataChangeAndFilterLegalDocumentsWhichNotChange.extract_act_info, axis=1)
+        return df
+
+    @classmethod
+    def extract_act_info(cls, row):
+        acts = cls.process_acts(row, 'Akty zmieniające') + cls.process_acts(row, 'Inf. o tekście jednolitym') \
+               + cls.process_acts(row, 'Akty uchylające') + cls.process_acts(row,
+                                                                             'Uchylenia wynikające z')  ## TODO to test this
+
+        return acts if acts else np.nan
+
     @classmethod
     @FlowStep.step(task_run_name='from_parquet_to_process_it_and_store_in_dynamodb')
     def run(cls, flow_information: dict, dask_client: Client, workers_count: int, s3_path_parquet: str):
+
         ddf_from_datalake = cls.read_from_datalake(s3_path_parquet, meta_DULegalDocumentsMetaData_intermediate_result)
 
         rr = ddf_from_datalake.compute()
@@ -68,13 +85,84 @@ class GetMetaDataChangeAndFilterLegalDocumentsWhichNotChange(FlowStep):
         ddf_from_datalake['call_result'] = ddf_from_datalake.apply(
             lambda row: make_api_call(f"{SEJM_API_URL}/{row['ELI']}/references"),
             axis=1,
-            meta=('call_result', 'object'))
+            meta=('call_result', 'object')
+        )
 
-        ddf_from_datalake['call_result_list'] = ddf_from_datalake.apply(cls.extract_act_info, axis=1)
+
+        # ddf_with_results = ddf_from_datalake.compute()
+        # w = ddf_with_results['call_result'].apply(type).value_counts()
+        #
+        # rrrrr = ddf_with_results[ddf_with_results["ELI"] == "DU/2011/696"]
+        #
+        # wwwwwwww= cls.extract_act_info_2(rrrrr.iloc[0].to_dict())
+        #
+        #
+        # s= ddf_with_results.apply(cls.extract_act_info_2, axis=1)
+
+        ddf_from_datalake['call_result_list'] = ddf_from_datalake.apply(cls.extract_act_info, axis=1, meta=("call_result_list", "object"))
+
+        # ss['call_result_list'] = ss.apply(
+        #     cls.extract_act_info,
+        #     axis=1
+        # )
+
+
+        # miau = ddf_from_datalake.compute()
+
+
+        # ss = cls.explode_and_normalize_partition(miau[miau["ELI"] == "DU/2011/696"].iloc[0].to_dict(),columns_order=meta_DULegalDocumentsMetaDataChanges_v2.columns.tolist())
+
+
+        w = 4
+
+        # miau_v2 = miau.map_partitions(cls.explode_and_normalize_partition,
+        #                                                      columns_order=meta_DULegalDocumentsMetaDataChanges_v2.columns.tolist(),
+        #                                                      meta=meta_DULegalDocumentsMetaDataChanges_v2)
+
+
+        # ss['call_result_list'] = ss.apply(cls.extract_act_info, axis=1)
+
+        # ddf_from_datalake = ddf_from_datalake.assign(
+        #     call_result_list=ddf_from_datalake.apply(
+        #         lambda row: cls.extract_act_info(row),
+        #         axis=1,
+        #         meta=("call_result_list", "object")
+        #     )
+        #
+        # )
+        # meta = ddf_from_datalake._meta.copy()
+        # meta["call_result_list"] = pd.Series(dtype="object")
+        #
+        # ddf_from_datalake = ddf_from_datalake.map_partitions(
+        #     lambda df: df.assign(call_result_list=df.apply(cls.extract_act_info, axis=1)),
+        #     meta=meta
+        # )
+        #
+        # df_filtered_from_empty_references = ddf_from_datalake[ddf_from_datalake['call_result_list'].notnull()]
+        #
+        # miau = ddf_from_datalake.compute()
+        #
+        # df_filtered_from_empty_references = ddf_from_datalake[ddf_from_datalake['call_result_list'].notnull()]
+        #
+        #
+        # rrrr = df_filtered_from_empty_references.compute()
+        #
+        # meta = ddf_from_datalake._meta.copy()
+        # meta["call_result_list"] = pd.Series(dtype="object")
+        #
+        # ddf_from_datalake = ddf_from_datalake.map_partitions(
+        #     cls.get_references_list_for_each_document,
+        #     meta=meta
+        # )
+        #
+        #
+        # ww = ddf_from_datalake.compute()
 
         ddf_final_api_ref = ddf_from_datalake.map_partitions(cls.explode_and_normalize_partition,
                                                              columns_order=meta_DULegalDocumentsMetaDataChanges_v2.columns.tolist(),
                                                              meta=meta_DULegalDocumentsMetaDataChanges_v2)
+
+        # ssss = ddf_final_api_ref.compute()
 
         segments = list(range(workers_count))
         table_name = "DULegalDocumentsMetaDataChanges_v2"
@@ -90,6 +178,8 @@ class GetMetaDataChangeAndFilterLegalDocumentsWhichNotChange(FlowStep):
             meta=meta_DULegalDocumentsMetaDataChanges_v2
         ), meta=meta_DULegalDocumentsMetaDataChanges_v2)
 
+        # ww = dynamodb_ddf_for_references.compute()
+
         ## merging already stored references with from api to check if there are any new ones not stored
         merged_ddf_for_ref_outer = ddf_final_api_ref.merge(
             dynamodb_ddf_for_references,
@@ -99,10 +189,16 @@ class GetMetaDataChangeAndFilterLegalDocumentsWhichNotChange(FlowStep):
             indicator=True
         )
 
+        wwwww = merged_ddf_for_ref_outer.dtypes
+
+        rr = merged_ddf_for_ref_outer.compute()
+
         ## comparing and getting only new ones
         ddf_new_rows_from_api = merged_ddf_for_ref_outer[
             merged_ddf_for_ref_outer['_merge'] == 'left_only'
             ]
+
+        w = ddf_new_rows_from_api.compute()
 
         ## getting ride of columns from db (which are null)
         ddf_new_rows_from_api = ddf_new_rows_from_api.rename(

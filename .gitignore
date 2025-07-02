@@ -15,5 +15,9 @@ preprocessing/pdf_elements/__pycache__/
 preprocessing/pdf_boundaries/__pycache__/
 preprocessing/mongo_db/__pycache__/
 preprocessing/stages/__pycache__/
+preprocessing/stages/__pycache__/download_raw_rows_for_each_year.cpython-38.pyc
+preprocessing/utils/__pycache__/stage_def.cpython-38.pyc
+
 /dask/.idea
 *.pyc
+/preprocessing/lines_2

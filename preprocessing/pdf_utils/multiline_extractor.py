@@ -5,14 +5,17 @@ import os
 import time
 from collections import Counter
 from typing import Dict, Any, List, Tuple
-
+import boto3
 import pdfplumber
 import unicodedata
+from langchain_aws import ChatBedrock
 from langchain_core.messages import HumanMessage, BaseMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from openai import RateLimitError
 
+from preprocessing.mongo_db.mongodb import get_mongodb_collection
 from preprocessing.pdf_elements.chars_maps import superscript_map, subscript_map
+from preprocessing.pdf_utils.external_extractor import ExternalTextExtractor
 from preprocessing.utils.defaults import AWS_REGION
 from preprocessing.utils.general import get_secret
 
@@ -21,39 +24,47 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
-class MultiLineTextExtractor:
+class MultiLineTextExtractor(ExternalTextExtractor):
     class MultiLineTextExtractorError(Exception):
         def __init__(self, message, missing_chars: List[str], response: BaseMessage, used_latex: bool = False):
             self.missing_chars = missing_chars
             self.response = response
             self.used_latex = used_latex
+            self.message = message
+            super().__init__(message)
+
+    class MultiLineCannotExtractError(Exception):
+        def __init__(self, message):
+            self.message = message
             super().__init__(message)
 
     def __init__(self, max_retries: int = 2):
+        super().__init__()
+        self.ddd = get_secret("OpenAiApiKey", AWS_REGION)["OPEN_API_KEY"]
+        # bedrock_runtime = boto3.client('bedrock-runtime', region_name=AWS_REGION)
         self.multiline_llm_extractor = ChatOpenAI(
             model="gpt-4o",
             temperature=0,
             api_key=get_secret("OpenAiApiKey", AWS_REGION)["OPEN_API_KEY"]
         )
+        # self.multiline_llm_extractor = ChatBedrock(
+        #     model_id="arn:aws:bedrock:eu-west-1:767427092061:inference-profile/eu.anthropic.claude-sonnet-4-20250514-v1:0",
+        #     provider="anthropic",
+        #     client=bedrock_runtime,
+        #     region_name=AWS_REGION,
+        #     model_kwargs={
+        #         "max_tokens": 40000,  # adjust as needed (max output length)
+        #         "temperature": 0.4,  # disables randomness (deterministic output)
+        #         "top_k": 50,  # consider only the top choice
+        #         "top_p":  0.9,  # no nucleus sampling (with temperature 0, this has no effect)
+        #         "stop_sequences": []  # leave empty unless you're inserting your own delimiters
+        #     }
+        #     # other params...
+        # )
         self.system_message = SystemMessage(
             content="You are a helpful assistant that extract text from image"
         )
         self.max_retries = max_retries
-
-    def crop_region_to_base64(self, line_dict: Dict[str, Any], page: pdfplumber.pdf.Page, threshold: float = 2.5,
-                              resolution: int = 600) -> str:
-        crop_box = (
-            line_dict['x0'] - threshold,
-            line_dict['top'] - threshold,
-            line_dict['x1'] + threshold,
-            line_dict['bottom'] + threshold
-        )
-
-        cropped_page = page.crop(crop_box)
-        image_buffer = io.BytesIO()
-        cropped_page.to_image(resolution=resolution).save(image_buffer, format="PNG")
-        image_buffer.seek(0)
-        return base64.b64encode(image_buffer.read()).decode("utf-8")
 
     def update_line_dict_with_multilines(self, line_dict: Dict[str, Any], threshold: float = 2.5) -> Tuple[
         List[str], List[str], List[str], List[str], List[str]]:
@@ -107,7 +118,8 @@ class MultiLineTextExtractor:
                             classification.append({"text": char['text'], "type": "normal"})
                             not_parsed_chars_subscript.append(str(char['text']))
                         else:
-                            classification.append({"text": subscript_map.get(char['text']), "type": "subscript"})
+                            classification.append({"text": char['text'], "type": "normal"})
+                            not_parsed_chars_subscript.append(str(char['text']))
                         continue
                     # elif closest_left['type'] == 'subscript' and abs(char['bottom'] - closest_left['bottom']) < 1:
                     #     classification.append({"text": subscript_map.get(char['text']), "type": "subscript"})
@@ -129,7 +141,16 @@ class MultiLineTextExtractor:
             not_parsed_chars_subscript, \
             not_parsed_chars_superscript
 
-    def parse_llm_response(self, completion: BaseMessage, required_chars: List[str], document_id: str, current_line_on_page: int, page: pdfplumber.pdf.Page):
+    def parse_llm_response(self, completion: BaseMessage, required_chars: List[str], document_id: str,
+                           current_line_on_page: int, page: pdfplumber.pdf.Page):
+
+        if completion.content.strip() in ["False", False]:
+            raise MultiLineTextExtractor.MultiLineTextExtractorError(
+                f"Model returned unreadable response: {completion.content}",
+                missing_chars=required_chars,
+                response=completion,
+                used_latex=False
+            )
 
         ## TODO first in document map the chars to this
         char_map = {chr(i): chr(i - 0x1d400 + ord('A')) for i in range(0x1D400, 0x1D419 + 1)}  # Bold A-Z
@@ -150,6 +171,10 @@ class MultiLineTextExtractor:
             '\uFE58': '\u2212',  # Small em dash
             '\uFE63': '\u2212',  # Small hyphen-minus
             '\uFF0D': '\u2212',  # Fullwidth hyphen-minus
+
+            # Asterisk normalization
+            '\u2217': '*',  # MATHEMATICAL ASTERISK → ASCII ASTERISK
+            '⬚': '□'
         })
         missing_chars = []
         char_names_completiotion = []
@@ -204,15 +229,20 @@ class MultiLineTextExtractor:
                     "text": f"""
 Extract the visible text from the provided input as plain text only. Follow these specific guidelines:
 
-1. **Plain Text Format Only**: Do not use LaTeX or any other formatting under any circumstances. Provide the text in plain text with all visible subscripts and superscripts using Unicode characters.
+1. **Plain Text Format Only**: Do not use LaTeX or any other formatting under any circumstances. Provide the text in plain text with all visible superscripts using Unicode characters.
 2. ** Do not use any newline characters: \\n, line breaks, or paragraph breaks
 3. **Subscripts and Superscripts**: 
-   - Explicitly retain characters listed as subscripts: {subscript_list}.
    - Explicitly retain characters listed as superscripts: {superscript_list}.
-   - Any characters not listed in `subscript_list` or `superscript_list` must appear in their **normal form**.
+   - Any characters not listed in  `superscript_list` must appear in their **normal form**.
+    - **Subscripts**:
+     - Subscript characters should always appear in their **normal form**, preceded by an underscore `_`. 
+       For example, H₃PO₄ → H_3PO_4
 4. **Correction of Missing or Incorrect Characters**:
-   - The following characters are explicitly **not parsed as subscript**: {not_parsed_chars_subscript}. Retain them in their **normal form**.
-   - The following characters are explicitly **not parsed as superscript**: {not_parsed_chars_superscript}. Retain them in their **normal form**.
+      - If superscript character **does not exist in Unicode**, you MUST represent it as:
+        {[f'- _{not_parsed_char} for superscript (e.g., W_{not_parsed_char})' for not_parsed_char in not_parsed_chars_superscript]}
+        - Subscript characters should always appear in their **normal form**, preceded by an underscore `_`. 
+        {[f'- _{not_parsed_char} for subscripts (e.g., P_{not_parsed_char})' for not_parsed_char in not_parsed_chars_subscript]}
+        
 5. **Previous Errors**:
    - In your previous response, you missed certain characters or used incorrect formats. Specifically:
      {f"Missing characters: {[f'{char} :{ord(char)}' for char in missing_chars]}" if missing_chars else ""}
@@ -221,12 +251,12 @@ Extract the visible text from the provided input as plain text only. Follow thes
 
 6. **Retry Guidelines**:
    - Do not use LaTeX or any non-plain text formatting.
-   - Ensure all characters, especially `g`, `C`, and any other missing characters, appear in their **normal form** unless explicitly listed as subscript or superscript.
-   - If a subscript or superscript does not exist in Unicode, retain the character in its **normal form**.
+   - Ensure all characters, especially `g`, `C`, and any other missing characters, appear in their **normal form** unless explicitly listed as superscript.
+   - If a superscript does not exist in Unicode, retain the character in its **normal form**.
 
 7. **Output Requirements**:
-   - Provide the output as plain text only.
-   - Include all visible subscripts and superscripts exactly as they appear.
+   - If the text is readable, return it as **plain text only**.
+   - If the text is unreadable or cannot be extracted for any reason, return exactly: False
    - Do not provide any additional explanations, metadata, or comments in your output.
 
 {f'Retrying due to errors in previous response. Missing characters: {missing_chars}, prior response: {prev_completion.content}' if missing_chars else ""}
@@ -236,6 +266,10 @@ Extract the visible text from the provided input as plain text only. Follow thes
                     "type": "image_url",
                     "image_url": {"url": f"data:image/png;base64,{image_data}"},
                 },
+                # {
+                #     "type": "image",
+                #     "source": {"type": "base64", "media_type": "image/png", "data": image_data}
+                # }
             ]
         )
 
@@ -243,8 +277,19 @@ Extract the visible text from the provided input as plain text only. Follow thes
             [self.system_message, human_message]
         )
 
-    def parse(self, document_id: str, current_line_on_page: int, line_dict: Dict[str, Any], page: pdfplumber.pdf.Page) -> str:
-        image_data = self.crop_region_to_base64(line_dict, page)
+    def parse(self, document_id: str, invoke_id: str, current_line_on_page: int, line_dict: Dict[str, Any],
+              page: pdfplumber.pdf.Page, threshold: float = 2.5) -> str:
+
+        crop_bbox = (
+            line_dict['x0'] - threshold,
+            line_dict['top'] - threshold,
+            line_dict['x1'] + threshold,
+            line_dict['bottom'] + threshold
+        )
+        image_data = self.crop_region_to_base64(crop_bbox, page, document_id, invoke_id)
+        if image_data is None:
+            return self.get_text_from_chars(line_dict)
+
 
         superscript_list, subscript_list, regular_char_list, not_parsed_chars_subscript, not_parsed_chars_superscript = \
             self.update_line_dict_with_multilines(line_dict)
@@ -263,9 +308,55 @@ Extract the visible text from the provided input as plain text only. Follow thes
                     current_line_on_page=current_line_on_page,
                     page=page
                 )
+            except MultiLineTextExtractor.MultiLineCannotExtractError as e:
+                get_mongodb_collection(
+                    db_name="preprocessing_legal_acts_texts",
+                    collection_name="legal_act_page_metadata_multiline_error"
+                ).update_one(
+                    {
+                        "ELI": document_id,
+                        "page_number": page.page_number,
+                        "num_line": current_line_on_page,
+                        "invoke_id": invoke_id,
+                    },
+                    {"$set": {
+                        "ELI": document_id,
+                        "page_number": page.page_number,
+                        "num_line": current_line_on_page,
+                        "error": e.message,
+                        "text_line": self.get_text_from_chars(line_dict),
+                        "invoke_id": invoke_id,
+                    }
+                    },
+                    upsert=True
+                )
+                return self.get_text_from_chars(line_dict)
             except MultiLineTextExtractor.MultiLineTextExtractorError as e:
+
                 if retries == self.max_retries:
-                    raise e
+                    ## TODO change it later ??? maybe?
+                    get_mongodb_collection(
+                        db_name="preprocessing_legal_acts_texts",
+                        collection_name="legal_act_page_metadata_multiline_error"
+                    ).update_one(
+                        {
+                            "ELI": document_id,
+                            "page_number": page.page_number,
+                            "num_line": current_line_on_page,
+                            "invoke_id": invoke_id,
+                        },
+                        {"$set": {
+                            "ELI": document_id,
+                            "page_number": page.page_number,
+                            "num_line": current_line_on_page,
+                            "error": e.message,
+                            "missing_chars": e.missing_chars,
+                            "invoke_id": invoke_id,
+                        }
+                        },
+                        upsert=True
+                    )
+                    return completion.content
                 else:
                     retries += 1
                     completion = self.call_llm(image_data, superscript_list, subscript_list, not_parsed_chars_subscript,

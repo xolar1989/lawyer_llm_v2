@@ -3,8 +3,11 @@ from typing import Union, Sequence, Tuple, Mapping, Any, List, Dict
 
 from pymongo import MongoClient, ASCENDING
 from pymongo.server_api import ServerApi
+from pymongo.typings import  _Pipeline
 
-from preprocessing.mongo_db.mongodb_schema import extract_text_and_table_page_number_stage_schema
+from preprocessing.mongo_db.mongodb_schema import extract_text_and_table_page_number_stage_schema, \
+    found_annotation_and_labeled_table_schema, define_legal_act_pages_boundaries_stage_schema, \
+    legal_act_boundaries_with_tables_stage_schema
 
 _IndexList = Union[
     Sequence[Union[str, Tuple[str, Union[int, str, Mapping[str, Any]]]]], Mapping[str, Any]
@@ -46,6 +49,11 @@ class MongodbCollection:
         for index in indexes:
             self.collection.create_index(index.indexes, **index.kwargs)
 
+    def update_one(self, filter: Mapping[str, Any],
+                   update: Union[Mapping[str, Any], _Pipeline],
+                   upsert: bool = False) -> None:
+        self.collection.update_one(filter, update, upsert)
+
     def insert_one(self, document: Mapping[str, Any]) -> None:
         self.collection.insert_one(document)
 
@@ -72,20 +80,106 @@ class MongodbCollection:
 
 def get_mongodb_collection(db_name, collection_name):
     ## localhost
-    # uri = "mongo_db+srv://superUser:awglm12345@serverlessinstance0.vxbabj8.mongo_db.net/?retryWrites=true&w=majority&appName=ServerlessInstance0"
-    uri = "mongo_db+srv://superUser:awglm12345@serverlessinstance0-pe-1.vxbabj8.mongo_db.net/"
+    # uri = "mongodb+srv://superUser:awglm12345@serverlessinstance0.vxbabj8.mongodb.net/?retryWrites=true&w=majority&appName=ServerlessInstance0"
+    uri = "mongodb+srv://superUser:awglm12345@serverlessinstance0.vxbabj8.mongodb.net/?retryWrites=true&w=majority&appName=ServerlessInstance0"
+    # r = 'mongodb+srv://superUser:awglm12345@serverlessinstance0.vxbabj8.mongodb.net/'
 
-    mongo_client = MongoClient(uri, server_api=ServerApi('1'))
+    # uri = "mongodb+srv://superUser:awglm12345@serverlessinstance0-pe-1.vxbabj8.mongodb.net/"
+
+    mongo_client = MongoClient(uri)
     mongo_db = mongo_client[db_name]
     if db_name == "preprocessing_legal_acts_texts":
         if collection_name == "extract_text_and_table_page_number_stage":
             return MongodbCollection(
-                collection_name="extract_text_and_table_page_number_stage",
+                collection_name=collection_name,
                 db_instance=mongo_db,
                 collection_schema=extract_text_and_table_page_number_stage_schema,
                 indexes=[
                     MongodbCollectionIndex([("expires_at", ASCENDING)], expireAfterSeconds=0),
                     MongodbCollectionIndex([("general_info.ELI", ASCENDING), ("invoke_id", ASCENDING)], unique=True)
+                ]
+            )
+        elif collection_name == "find_annotation_and_label_table_stage":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                collection_schema=found_annotation_and_labeled_table_schema,
+                indexes=[
+                    MongodbCollectionIndex([("expires_at", ASCENDING)], expireAfterSeconds=0),
+                    MongodbCollectionIndex([("general_info.ELI", ASCENDING), ("invoke_id", ASCENDING)], unique=True)
+                ]
+            )
+        elif collection_name == "define_legal_act_pages_boundaries_stage":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                collection_schema=define_legal_act_pages_boundaries_stage_schema,
+                indexes=[
+                    MongodbCollectionIndex([("expires_at", ASCENDING)], expireAfterSeconds=0),
+                    MongodbCollectionIndex([("general_info.ELI", ASCENDING), ("invoke_id", ASCENDING)], unique=True)
+                ]
+            )
+        elif collection_name == "legal_act_boundaries_with_tables_stage":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                collection_schema=legal_act_boundaries_with_tables_stage_schema,
+                indexes=[
+                    MongodbCollectionIndex([("expires_at", ASCENDING)], expireAfterSeconds=0),
+                    MongodbCollectionIndex([("general_info.ELI", ASCENDING), ("invoke_id", ASCENDING)], unique=True)
+                ]
+            )
+        elif collection_name == 'legal_act_page_metadata':
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex([("expires_at", ASCENDING)], expireAfterSeconds=0),
+                    MongodbCollectionIndex(
+                        [("general_info.ELI", ASCENDING), ("invoke_id", ASCENDING), ("page.page_number", ASCENDING)],
+                        unique=True)
+                ]
+            )
+        elif collection_name == 'legal_act_page_metadata_multiline_error':
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex([("expires_at", ASCENDING)], expireAfterSeconds=0),
+                    MongodbCollectionIndex(
+                        [("ELI", ASCENDING), ("invoke_id", ASCENDING), ("page_number", ASCENDING),
+                         ("num_line", ASCENDING)],
+                        unique=True)
+                ]
+            )
+        elif collection_name == 'legal_act_page_metadata_table_extraction':
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("ELI", ASCENDING), ("invoke_id", ASCENDING), ("page_number", ASCENDING), ("table_index", ASCENDING)],
+                        unique=True)
+                ]
+            )
+        elif collection_name == "legal_act_page_metadata_document_error":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("general_info.ELI", ASCENDING), ("invoke_id", ASCENDING)],
+                        unique=True)
+                ]
+            )
+        elif collection_name == "legal_act_page_metadata_crop_bbox_image":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("ELI", ASCENDING), ("invoke_id", ASCENDING), ("page_number", ASCENDING), ("bbox", ASCENDING)],
+                        unique=True)
                 ]
             )
     raise Exception("Invalid db_name or collection_name Mongodb error")

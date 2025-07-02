@@ -88,6 +88,7 @@ class DownloadPdfsForLegalActsRows(FlowStep):
         # Log worker information
         for future in futures:
             who_has = dask_client.who_has(future)
+            # TODO
             logger.info(f"Task {future.key} executed on workers: {who_has}")
 
         result_df = pd.DataFrame(results)

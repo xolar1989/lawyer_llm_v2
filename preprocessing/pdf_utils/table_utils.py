@@ -3,6 +3,8 @@ from typing import List, Union, Tuple
 import pdfplumber
 from pdfplumber.table import Table
 
+from preprocessing.logging.aws_logger import aws_logger
+from preprocessing.mongo_db.mongodb import get_mongodb_collection
 from preprocessing.utils.page_regions import LegalActPageRegionParagraphs
 
 
@@ -25,8 +27,7 @@ class TableDetector:
                            page: pdfplumber.pdf.Page) -> List[Table]:
         sorted_tables = []
 
-        bbox = (paragraph.start_x, paragraph.start_y, paragraph.end_x, paragraph.end_y)
-        page_paragraph = page.within_bbox(bbox)
+        page_paragraph = page.within_bbox(paragraph.bbox)
         page_text = page_paragraph.extract_text().strip()
         for table_index, table in enumerate(tables_in_page):
             bbox_table_corrected = (
@@ -35,11 +36,17 @@ class TableDetector:
                 paragraph.end_x,
                 table.bbox[3]
             )
+            if not TableDetector.is_table_bbox_within_paragraph(bbox_table_corrected, paragraph.bbox):
+                aws_logger.error(f"Invalid state: table of bounds")
+
+                continue
+
             text_of_table = page_paragraph.within_bbox(bbox_table_corrected).extract_text().strip()
 
             if text_of_table not in page_text:
-                raise ValueError(f"Invalid state: text of table not found in page text, text_of_table: "
+                aws_logger.error(f"Invalid state: text of table not found in page text, text_of_table: "
                                  f"{text_of_table}, page_text: {page_text}, page_number: {page_paragraph.page_number}")
+                continue
 
             # Find the start index of the table in the page text
             table_start_index = page_text.index(text_of_table)
@@ -87,6 +94,14 @@ class TableDetector:
 
         return None
 
+    @staticmethod
+    def is_table_bbox_within_paragraph(table_bbox, paragraph_bbox):
+        return (
+                table_bbox[0] >= paragraph_bbox[0] and
+                table_bbox[1] >= paragraph_bbox[1] and
+                table_bbox[2] <= paragraph_bbox[2] and
+                table_bbox[3] <= paragraph_bbox[3]
+        )
 
     @staticmethod
     def _is_bbox_region_is_overlapping(bbox_to_add, bbox_added):

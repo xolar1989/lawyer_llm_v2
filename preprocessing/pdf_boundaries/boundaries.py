@@ -1,6 +1,11 @@
-from abc import ABC
+import string
+from abc import ABC, abstractmethod
+from collections import Counter
+from typing import Any, List
 
 import pdfplumber
+
+from preprocessing.pdf_elements.chars import CharLegalAct
 
 
 class BoundariesArea(ABC):
@@ -22,3 +27,27 @@ class BoundariesArea(ABC):
         area = page.within_bbox(area_bbox)
         area_text = area.extract_text().strip()
         return bool(area_text)
+
+    def get_heights_of_chars(self, page: pdfplumber.pdf.Page) -> Counter:
+        text_lines = page.within_bbox(self.bbox).extract_text_lines()
+        text_lines = [
+            {
+                **line,
+                'merged': False,
+                'chars': [{**char, 'num_line': 1} for char in line['chars']]
+            }
+            for line in sorted(text_lines, key=lambda x: x['top'])
+        ]
+        heights = [
+            CharLegalAct.get_height_from_dict(char)
+            for line in text_lines
+            for char in line["chars"]
+            if char.get("text") not in string.whitespace
+        ]
+        height_counts = Counter(heights)
+        return height_counts
+
+    @classmethod
+    @abstractmethod
+    def split_into_areas(cls, **kwargs) -> List[Any]:
+        pass

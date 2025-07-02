@@ -1,3 +1,5 @@
+from typing import Dict
+
 
 class CharLegalAct:
 
@@ -9,3 +11,7 @@ class CharLegalAct:
         self.top = top
         self.text = text
         self.index_in_legal_act = index_in_legal_act
+
+    @classmethod
+    def get_height_from_dict(cls, char: Dict) -> float:
+        return round(char["height"], 1)

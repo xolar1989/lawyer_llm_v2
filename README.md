@@ -1,3 +1,14 @@
+
+## Setup env
+
+```bash
+
+sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-pol libtesseract-dev libleptonica-dev poppler-utils pkg-config && sudo apt-get clean
+
+
+```
+
+
 ## Configure git
 
 ``` bash
@@ -23,6 +34,9 @@ ssh tunnel to bastion
 
 
 ```
+
+
+
 
 
 ### Create Airflow stack
