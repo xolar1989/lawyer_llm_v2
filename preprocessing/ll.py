@@ -17,7 +17,7 @@ from numpy import ndarray
 from spire.pdf import *
 
 from preprocessing.kkk import get_storage_options_for_ddf_dask
-from preprocessing.utils.dask_cluster import retry_dask_task
+from preprocessing.dask.fargate_dask_cluster import retry_dask_task
 from preprocessing.utils.datalake import Datalake
 from preprocessing.utils.defaults import DATALAKE_BUCKET, SEJM_API_URL, AWS_REGION
 from preprocessing.mongo_db.mongodb import MongodbCollection, MongodbCollectionIndex

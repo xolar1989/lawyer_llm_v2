@@ -1,19 +1,11 @@
-import base64
-import string
-import sys
-import threading
-
-from distributed import get_worker
 from dotenv import load_dotenv
 import gc
 import io
 import os
 # import s3fs
 import re
-import time
 import traceback
 from abc import ABC, abstractmethod
-from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Union, List, Dict, Mapping, Any, Set, Tuple
@@ -23,17 +15,11 @@ import cv2
 import numpy as np
 import pandas as pd
 import pdfplumber
-import unicodedata
-from PIL import Image
 from PyPDF2 import PdfFileReader, PdfFileWriter
 import dask.dataframe as dd
 from dask import delayed
-from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
-from langchain_openai import ChatOpenAI
-from openai import RateLimitError
 from pdfplumber.table import Table
 from pydantic.v1 import BaseModel
-from pymongo import ASCENDING
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 from dask.distributed import Client, as_completed
@@ -44,46 +30,31 @@ from prefect.context import get_run_context
 from tqdm import tqdm
 
 from preprocessing.logging.aws_logger import aws_logger
-from preprocessing.pdf_boundaries.boundaries import BoundariesArea
-from preprocessing.pdf_boundaries.footer_boundaries import LegalActFooterArea
-from preprocessing.pdf_boundaries.margin_boundaries import LegalActMarginArea
-from preprocessing.pdf_boundaries.paragraph_boundaries import LegalActParagraphArea, ParagraphAreaType
-from preprocessing.pdf_elements.chars import CharLegalAct
-from preprocessing.pdf_elements.lines import TableRegionPageLegalAct, OrderedObjectLegalAct, TextLinePageLegalAct
-from preprocessing.pdf_utils.area_text_extractor import PageAreaTextExtractor
-from preprocessing.pdf_utils.multiline_extractor import MultiLineTextExtractor
-from preprocessing.pdf_utils.table_utils import TableDetector
 from preprocessing.stages.download_pdfs_for_legal_acts_rows import DownloadPdfsForLegalActsRows
 from preprocessing.stages.download_raw_rows_for_each_year import DownloadRawRowsForEachYear
 from preprocessing.stages.establish_legal_act_segments_boundaries import EstablishLegalActSegmentsBoundaries
 from preprocessing.stages.filter_rows_from_api_and_upload_to_parquet_for_further_processing import \
     FilterRowsFromApiAndUploadToParquetForFurtherProcessing
-from preprocessing.stages.get_existing_dask_cluster import GetExistingDaskCluster
 from preprocessing.stages.get_metadatachange_and_filter_legal_documents_which_not_change import \
     GetMetaDataChangeAndFilterLegalDocumentsWhichNotChange
 from preprocessing.stages.get_rows_of_legal_acts_for_preprocessing import GetRowsOfLegalActsForPreprocessing
 from preprocessing.stages.line_division import LegalActLineDivision
 from preprocessing.stages.update_dask_cluster_workers import UpdateDaskClusterWorkers
 from preprocessing.utils.stages_objects import EstablishLegalActSegmentsBoundariesResult, \
-    EstablishLegalWithTablesResult, GeneralInfo
+    EstablishLegalWithTablesResult
 from preprocessing.stages.create_dask_cluster import CreateDaskCluster
 from preprocessing.stages.start_dag import StartDag
-from preprocessing.utils.attachments_extraction import get_attachments_headers, AttachmentRegion, \
-    get_pages_with_attachments, PageRegions
-from preprocessing.utils.dask_cluster import retry_dask_task
+from preprocessing.utils.attachments_extraction import AttachmentRegion, \
+    get_pages_with_attachments
+from preprocessing.dask.fargate_dask_cluster import retry_dask_task
 from preprocessing.utils.datalake import Datalake
 from preprocessing.utils.defaults import ERROR_TOPIC_NAME, AWS_REGION, DAG_TABLE_ID, \
     DATALAKE_BUCKET
 from preprocessing.utils.dynamodb_helper import meta_DULegalDocumentsMetaDataChanges_v2, \
     meta_DULegalDocumentsMetaData_with_s3_path
-from preprocessing.utils.general import get_secret
-from preprocessing.mongo_db.mongodb import get_mongodb_collection, MongodbCollection, MongodbCollectionIndex, \
-    MongodbObject
-from preprocessing.mongo_db.mongodb_schema import extract_text_and_table_page_number_stage_schema, \
-    schema_for_legal_act_row, define_legal_act_pages_boundaries_stage_schema, \
-    legal_act_boundaries_with_tables_stage_schema
-from preprocessing.utils.page_regions import LegalActPageRegionAttachment, LegalActPageRegionMarginNotes, \
-    LegalActPageRegionParagraphs, LegalActPageRegionFooterNotes, LegalActPageRegion, LegalActPageRegionTableRegion, \
+from preprocessing.mongo_db.mongodb import get_mongodb_collection
+from preprocessing.mongo_db.mongodb_schema import schema_for_legal_act_row
+from preprocessing.utils.page_regions import LegalActPageRegionParagraphs, LegalActPageRegion, LegalActPageRegionTableRegion, \
     TableRegion
 from preprocessing.utils.s3_helper import extract_bucket_and_key
 from preprocessing.utils.sns_helper import send_sns_email
@@ -104,8 +75,6 @@ os.environ['TZ'] = 'UTC'
 r = os.environ
 
 get_versions()
-
-import dask
 
 s = 4
 
@@ -1264,7 +1233,7 @@ class EstablishPartsOfLegalActs(FlowStep):
                 .from_dict(
                 get_mongodb_collection(
                     db_name="preprocessing_legal_acts_texts",
-                    collection_name="legal_act_boundaries_with_tables_stage"
+                    collection_name="legal_act_page_metadata"
                 ).find_one(
                     {
                         "general_info.ELI": row['ELI'],
@@ -1553,27 +1522,27 @@ def preprocessing_api():
 
     R = 4
     ## TODO when we start flow define if stack name already exist, omit creation of stack
-    dask_cluster = CreateDaskCluster.run(
-        stack_name=STACK_NAME,
-        cluster_name=CLUSTER_NAME,
-        workers_service_name=WORKERS_SERVICE,
-        flow_run_id=flow_run.id,
-        flow_run_name=flow_run.name,
-        cluster_props={
-            "EnableScaling": "false",
-            "MemoryCapacity": "8192",
-            "CpuCapacity": '4096'
-        }
-    )
+    # dask_cluster = CreateDaskCluster.run(
+    #     stack_name=STACK_NAME,
+    #     cluster_name=CLUSTER_NAME,
+    #     workers_service_name=WORKERS_SERVICE,
+    #     flow_run_id=flow_run.id,
+    #     flow_run_name=flow_run.name,
+    #     cluster_props={
+    #         "EnableScaling": "false",
+    #         "MemoryCapacity": "8192",
+    #         "CpuCapacity": '4096'
+    #     }
+    # )
 
     datalake = Datalake(datalake_bucket=DATALAKE_BUCKET, aws_region=AWS_REGION)
 
     # dask_cluster = GetExistingDaskCluster.run(stack_name='dask-stack-28429daf-bd4c-4232-95c3-99e530c9d694')
     # #
-    dask_cluster = UpdateDaskClusterWorkers.run(
-        dask_cluster=dask_cluster,
-        desired_count=20
-    )
+    # dask_cluster = UpdateDaskClusterWorkers.run(
+    #     dask_cluster=dask_cluster,
+    #     desired_count=20
+    # )
 
     # dask_cluster = RestartDaskClusterWorkers.run(
     #     dask_cluster=dask_cluster
@@ -1786,16 +1755,102 @@ def preprocessing_api():
 
 
 log = logging.getLogger(__name__)
+@flow
+def for_the_running_without_debugging(local_cluster: bool = True):
+    flow_run_context = get_run_context()
+    flow_run = flow_run_context.flow_run
+
+    flow_information = StartDag.run(flow_run.id, flow_run.name)
+    StartDag.dag_information = flow_information
+
+    STACK_NAME = f'dask-stack-{flow_run.id}'
+    CLUSTER_NAME = f'Fargate-Dask-Cluster-{flow_run.name}'
+    WORKERS_SERVICE = "Dask-Workers"
+
+    dask_cluster = CreateDaskCluster.run(
+        stack_name=STACK_NAME,
+        cluster_name=CLUSTER_NAME,
+        workers_service_name=WORKERS_SERVICE,
+        flow_run_id=flow_run.id,
+        flow_run_name=flow_run.name,
+        cluster_props={
+            "EnableScaling": "false",
+            "MemoryCapacity": "8192",
+            "CpuCapacity": '4096'
+        }
+    )
+
+    dask_cluster = UpdateDaskClusterWorkers.run(
+        dask_cluster=dask_cluster,
+        desired_count=20
+    )
+
+
+    dask_workers_count = dask_cluster.get_workers_count()
+
+    client = Client(dask_cluster.cluster_url)
+
+    ## STEP 1
+    path_to_raw_rows = DownloadRawRowsForEachYear.run(flow_information=flow_information, dask_client=client,
+                                                      type_document="DU")
+
+    ## STEP 2
+    path_to_rows = GetRowsOfLegalActsForPreprocessing.run(flow_information=flow_information,
+                                                          dask_client=client,
+                                                          s3_path=path_to_raw_rows)
+    ## STEP 3
+    path_DULegalDocumentsMetaData_rows = FilterRowsFromApiAndUploadToParquetForFurtherProcessing.run(
+        flow_information=flow_information,
+        dask_client=client,
+        workers_count=dask_workers_count,
+        s3_path_parquet=path_to_rows)
+
+    ## STEP 4
+    path_to_parquet_for_legal_documents, path_to_parquet_for_legal_documents_changes_lists = GetMetaDataChangeAndFilterLegalDocumentsWhichNotChange.run(
+        flow_information=flow_information,
+        dask_client=client,
+        workers_count=dask_workers_count,
+        s3_path_parquet=path_DULegalDocumentsMetaData_rows
+    )
+
+    ## STEP 5
+    path_to_parquet_for_legal_documents_with_s3_pdf = DownloadPdfsForLegalActsRows.run(
+        flow_information=flow_information,
+        dask_client=client,
+        workers_count=dask_workers_count,
+        s3_path_parquet=path_to_parquet_for_legal_documents
+    )
+
+    ## STEP 6
+    path_to_parquet_pages_boundaries = EstablishLegalActSegmentsBoundaries.run(flow_information=flow_information,
+                                                                               dask_client=client,
+                                                                               workers_count=dask_workers_count,
+                                                                               s3_path_parquet_with_legal_document_rows=path_to_parquet_for_legal_documents_with_s3_pdf)
+
+    ## STEP 7  heavy cost
+    path_to_parquet_line_divisions = LegalActLineDivision.run(flow_information=flow_information, dask_client=client, workers_count=dask_workers_count,
+                                   s3_path_parquet_with_eli_documents=path_to_parquet_pages_boundaries)
+
+    print(path_to_parquet_line_divisions)
+
+    dask_cluster.delete_dask_cluster()
+
 
 if __name__ == "__main__":
     # here we define flow
     # StartDag.run() >> CreateDaskCluster
-
     try:
-        preprocessing_api()
+        ## TODO JUST FOCUS ON THIS
+        for_the_running_without_debugging()
     except Exception:
         log.error("Remote error:\n%s", traceback.format_exc())
-        raise  # ważne! żeby Prefect widział błąd
+
+
+    # try:
+    #     preprocessing_api()
+    # except Exception:
+    #     log.error("Remote error:\n%s", traceback.format_exc())
+    #     raise  # ważne! żeby Prefect widział błąd
     cluster_name = 'Fargate-Dask-Cluster'  # Replace with your ECS cluster name
     service_name = 'Dask-Workers'  # Replace with your ECS service name
     # ecs_client = boto3.client('ecs', region_name='eu-west-1')

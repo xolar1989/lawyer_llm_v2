@@ -1,14 +1,14 @@
-from preprocessing.utils.dask_cluster import DaskCluster
+from preprocessing.dask.fargate_dask_cluster import FargateDaskCluster
 from preprocessing.utils.stage_def import FlowStep, FlowStepError
 
 
 class GetExistingDaskCluster(FlowStep):
-    dask_cluster: DaskCluster = None
+    dask_cluster: FargateDaskCluster = None
 
     @classmethod
     @FlowStep.step(task_run_name='get_existing_dask_cluster')
     def run(cls, stack_name: str):
-        return DaskCluster.from_existing(stack_name=stack_name)
+        return FargateDaskCluster.from_existing(stack_name=stack_name)
 
     @classmethod
     def rollback(cls, exception: FlowStepError):

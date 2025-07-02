@@ -24,7 +24,7 @@ from preprocessing.pdf_utils.area_text_extractor import PageAreaTextExtractor
 from preprocessing.pdf_utils.multiline_extractor import MultiLineTextExtractor
 from preprocessing.pdf_utils.table_utils import TableDetector
 from preprocessing.utils.attachments_extraction import PageRegions
-from preprocessing.utils.dask_cluster import retry_dask_task
+from preprocessing.dask.fargate_dask_cluster import retry_dask_task
 from preprocessing.utils.defaults import AWS_REGION
 from preprocessing.utils.page_regions import LegalActPageRegionFooterNotes, LegalActPageRegionMarginNotes
 from preprocessing.utils.s3_helper import extract_bucket_and_key

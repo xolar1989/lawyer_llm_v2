@@ -1,5 +1,84 @@
+## Prerequisites 
 
-## Setup env
+> 💡https://www.docker.com/products/docker-desktop/
+
+
+## Install WSL
+
+```bash
+
+wsl --install 
+
+```
+
+## Then in wsl environment it should be installed
+
+
+### AWS CLI
+
+```
+
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+
+#  If not installed 
+sudo apt install unzip -y  
+
+unzip awscliv2.zip
+sudo ./aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
+
+
+ # Confirm the installation with the following command.
+
+    aws --version
+
+```
+
+### SETUP AWS account
+
+```bash 
+
+aws configure
+
+AWS Access Key ID = <given-access-key>
+AWS Secret Access Key = <given-secret-key>
+Default region name = <eu-west-1>
+Default output format ENTER
+
+
+
+```
+
+### SETUP CONDA 
+
+```bash
+
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+
+bash ~/Miniconda3-latest-Linux-x86_64.sh
+```
+
+Follow the prompts:
+
+- ✅ Accept the license terms
+- ✅ Confirm the installation location
+- ✅ Choose **"Yes"** when asked to initialize Miniconda in your shell
+
+> 💡 Choosing "Yes" allows Conda to automatically modify your shell configuration so it works in new terminals.
+
+#### 🔄 Apply the changes (or restart terminal)
+
+```bash
+source ~/.bashrc
+
+```
+
+
+
+
+### Setup env
+
+
+#### 🔄 Apply the libraries in linux 
 
 ```bash
 
@@ -7,6 +86,34 @@ sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-pol l
 
 
 ```
+
+#### 🔄 Create conda env in linux wsl
+
+```bash
+conda env create -f environment.yml
+```
+
+#### 💡 Updating conda env in linux wsl
+
+```bash
+conda env update -f environment.yml --prune
+```
+
+
+# 📂 **Current code is located in**: `/preprocessing/kkk.py`
+
+
+
+
+
+## Updating Dask image for cluster
+
+```bash
+
+.\dask\push-to-ecr.ps1
+
+```
+
 
 
 ## Configure git
@@ -35,27 +142,6 @@ ssh tunnel to bastion
 
 ```
 
-
-
-
-
-### Create Airflow stack
-
-```bash
-
-aws cloudformation create-stack --stack-name airflow-stack --template-body file:///Users/karol/Desktop/fame_cloud/iaas-cloud/CloudFormation/dev/airflow.yaml  --region eu-west-1 --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND
-
-
-```
-
-
-### How run airflow locally
-
-```bash
-
-https://github.com/aws/aws-mwaa-local-runner/
-
-```
 
 
 ### Create BastionHost

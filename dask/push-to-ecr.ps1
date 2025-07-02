@@ -3,7 +3,7 @@ param (
     [string]$AWSAccountID= $(aws sts get-caller-identity --query "Account" --output text),  # Dynamically fetch AWS Account ID
     [string]$AWSRegion = "eu-west-1",
     [string]$ImageTag = "latest",  # Default tag is 'latest' if not provided
-    [string]$AWSCredentialsFilePath = "C:\Users\karol\.aws\credentials"  # Path to AWS credentials file
+    [string]$AWSCredentialsFilePath = "$([Environment]::GetFolderPath('UserProfile'))\.aws\credentials"  # Path to AWS credentials file
 )
 
 function Get-AWSCredentials {

@@ -17,11 +17,12 @@ import dask.dataframe as dd
 from tqdm import tqdm
 
 from preprocessing.utils.defaults import AWS_REGION, DAG_TABLE_ID
+from preprocessing.utils.general import timeit
 from preprocessing.utils.sensor import Sensor
 from preprocessing.utils.stage_def import get_storage_options_for_ddf_dask
 
 
-class DaskCluster:
+class FargateDaskCluster:
 
     def __init__(self, stack_name: str, cluster_name: str, workers_service_name: str,
                  cloudformation_client: BaseClient, ecs_client: BaseClient):
@@ -298,10 +299,22 @@ class DaskCluster:
         # Return True if the desired count of restarted tasks matches the running count
         return len(new_running_tasks) == len(prev_tasks_arns)
 
+    @timeit
     def delete_dask_cluster(self):
         try:
+            try:
+                self.cloudformation_client.describe_stacks(StackName=self.stack_name)
+            except self.cloudformation_client.exceptions.ClientError as e:
+                if "does not exist" in str(e):
+                    print(f"Stack {self.stack_name} already deleted.")
+                    return
+                raise
+
+
             response = self.cloudformation_client.delete_stack(StackName=self.stack_name)
             print(f"Deleting stack {self.stack_name}...")
+            waiter = self.cloudformation_client.get_waiter('stack_delete_complete')
+            waiter.wait(StackName=self.stack_name)
             return response
         except Exception as e:
             print(f"An error occurred: {e}")

@@ -15,8 +15,7 @@ from tqdm import tqdm
 from preprocessing.mongo_db.mongodb import get_mongodb_collection
 from preprocessing.utils.attachments_extraction import get_pages_with_attachments, get_attachments_headers, \
     AttachmentRegion
-from preprocessing.utils.dask_cluster import retry_dask_task
-from preprocessing.utils.datalake import Datalake
+from preprocessing.dask.fargate_dask_cluster import retry_dask_task
 from preprocessing.utils.defaults import AWS_REGION, DAG_TABLE_ID
 from preprocessing.utils.dynamodb_helper import meta_DULegalDocumentsMetaData_with_s3_path
 from preprocessing.utils.page_regions import LegalActPageRegionParagraphs, LegalActPageRegionMarginNotes, \
@@ -151,7 +150,6 @@ class EstablishLegalActSegmentsBoundaries(FlowStep):
     @classmethod
     @FlowStep.step(task_run_name='establish_legal_act_segments_boundaries')
     def run(cls, flow_information: dict, dask_client: Client, workers_count: int,
-            datalake: Datalake,
             s3_path_parquet_with_legal_document_rows: str):
         ddf_legal_document_rows_datalake = cls.read_from_datalake(
             s3_path_parquet_with_legal_document_rows,

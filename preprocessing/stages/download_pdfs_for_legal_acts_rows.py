@@ -1,7 +1,6 @@
 import io
 import logging
 
-import boto3
 import pandas as pd
 import requests
 from dask import delayed
@@ -9,7 +8,7 @@ from prefect import get_run_logger
 from requests.adapters import HTTPAdapter
 from tqdm import tqdm
 
-from preprocessing.utils.dask_cluster import retry_dask_task
+from preprocessing.dask.fargate_dask_cluster import retry_dask_task
 from preprocessing.utils.defaults import SEJM_API_URL, DATALAKE_BUCKET, DAG_TABLE_ID, AWS_REGION
 from preprocessing.utils.dynamodb_helper import meta_DULegalDocumentsMetaData
 from preprocessing.utils.stage_def import FlowStep, get_storage_options_for_ddf_dask
