@@ -31,6 +31,10 @@ from tqdm import tqdm
 
 from preprocessing.dask.local_dask_cluster import LocalDaskCluster
 from preprocessing.logging.aws_logger import aws_logger
+from preprocessing.mongodb_collections.legal_act_page_metadata import LegalActPageMetadata
+from preprocessing.pdf_elements.chars import CharLegalAct
+from preprocessing.pdf_elements.legal_act_page import LegalActPage
+from preprocessing.pdf_elements.lines import TextLinePageLegalAct, TableRegionPageLegalAct, OrderedObjectLegalAct
 from preprocessing.stages.create_local_dask_cluster import CreateLocalDaskCluster
 from preprocessing.stages.download_pdfs_for_legal_acts_rows import DownloadPdfsForLegalActsRows
 from preprocessing.stages.download_raw_rows_for_each_year import DownloadRawRowsForEachYear
@@ -43,7 +47,7 @@ from preprocessing.stages.get_rows_of_legal_acts_for_preprocessing import GetRow
 from preprocessing.stages.line_division import LegalActLineDivision
 from preprocessing.stages.update_dask_cluster_workers import UpdateDaskClusterWorkers
 from preprocessing.utils.stages_objects import EstablishLegalActSegmentsBoundariesResult, \
-    EstablishLegalWithTablesResult
+    EstablishLegalWithTablesResult, GeneralInfo
 from preprocessing.stages.create_dask_cluster import CreateRemoteDaskCluster
 from preprocessing.stages.start_dag import StartDag
 from preprocessing.utils.attachments_extraction import AttachmentRegion, \
@@ -54,7 +58,7 @@ from preprocessing.utils.defaults import ERROR_TOPIC_NAME, AWS_REGION, DAG_TABLE
     DATALAKE_BUCKET
 from preprocessing.utils.dynamodb_helper import meta_DULegalDocumentsMetaDataChanges_v2, \
     meta_DULegalDocumentsMetaData_with_s3_path
-from preprocessing.mongo_db.mongodb import get_mongodb_collection
+from preprocessing.mongo_db.mongodb import get_mongodb_collection, MongodbObject
 from preprocessing.mongo_db.mongodb_schema import schema_for_legal_act_row
 from preprocessing.utils.page_regions import LegalActPageRegionParagraphs, LegalActPageRegion, \
     LegalActPageRegionTableRegion, \
@@ -839,17 +843,197 @@ class StatusOfText(Enum):
     NOT_MATCH_CHANGE = "NON_MATCH"
 
 
-class TextSplit:
+class CharTextSplit(MongodbObject):
 
-    def __init__(self, text: str, start_index: int, end_index: int, action_type: StatusOfText):
-        self.start_index = start_index
-        self.end_index = end_index
-        self.text = text
+    def to_dict(self):
+        return {
+            'char': self.char.__dict__,
+            "action_type": self.action_type.name
+        }
+
+    @classmethod
+    def from_dict(cls, dict_object: Mapping[str, Any]):
+        return CharTextSplit(
+            char=CharLegalAct(**dict_object['char']),
+            action_type=StatusOfText[dict_object["action_type"]]
+        )
+
+    def __init__(self, char: CharLegalAct, action_type: StatusOfText):
+        self.char = char
         self.action_type = action_type
+
+
+class TextSplit(MongodbObject):
+
+    def to_dict(self):
+        return {
+
+            "chars": [char.to_dict() for char in self.chars],
+            "action_type": self.action_type.name
+        }
+
+    @classmethod
+    def from_dict(cls, dict_object: Mapping[str, Any]):
+        return TextSplit(
+            chars=[CharTextSplit.from_dict(char) for char in dict_object['chars']],
+            action_type=StatusOfText[dict_object["action_type"]]
+        )
+
+    def __init__(self, chars: List[CharTextSplit], action_type: StatusOfText):
+        # self.start_index = start_index
+        # self.end_index = end_index
+        # self.text = text
+        self.chars = sorted(chars, key=lambda split_char: split_char.char.index_in_legal_act)
+        self.action_type = action_type
+
+    @property
+    def start_index(self):
+        return self.chars[0].char.index_in_legal_act
+
+    @property
+    def end_index(self):
+        return self.chars[len(self.chars) - 1].char.index_in_legal_act
+
+    @property
+    def text(self):
+        return "".join(legal_char.char.text for legal_char in self.chars)
+
+    def build_text_split_from_indexes(self, left_index: int, right_index: int) -> 'TextSplit':
+        chars: List[CharTextSplit] = []
+        index_of_first_char_in_tab = self.get_char_index(left_index)
+        length_of_sequence = right_index - left_index + 1
+        for current_index in range(index_of_first_char_in_tab, length_of_sequence + index_of_first_char_in_tab):
+            chars.append(self.chars[current_index])
+        return TextSplit(chars, self.action_type)
+
+    def get_chars_from_indexes(self, left_index, right_index) -> List[CharLegalAct]:
+        chars = []
+        index_of_first_char_in_tab = self.get_char_index(left_index)
+        length_of_sequence = right_index - left_index + 1
+        for current_index in range(index_of_first_char_in_tab, length_of_sequence + index_of_first_char_in_tab):
+            chars.append(self.chars[current_index].char)
+        return chars
+
+    def get_chars_from_indexes_and_set_status(self, left_index, right_index, status: StatusOfText):
+        chars_without_status = self.get_chars_from_indexes(left_index, right_index)
+        return list(map(lambda char: CharTextSplit(char, status), chars_without_status))
+
+    def get_char_index(self, index_in_legal_act):
+        for char_index, split_char in enumerate(self.chars):
+            if split_char.char.index_in_legal_act == index_in_legal_act:
+                return char_index
+        raise RuntimeError(f"Index is out of range in text split: {self.text}")
 
     def is_up_to_date(self):
         normalized_text = re.sub(r'[\s\n\r]+', '', self.text).strip()
         return normalized_text not in ["(uchylony)", "(uchylona)", "(pominięte)", "(pominięty)"]
+
+
+class LegalUnitSplit(MongodbObject):
+    def __init__(self, split: TextSplit):
+        self.split = split
+
+    @property
+    def id_unit(self):
+        match_of_identification = re.match(self._can_erase_number_pattern(), self.split.text)
+
+        identification_start = self.split.start_index + match_of_identification.start(1)
+        identification_end = self.split.start_index + match_of_identification.end(1) - 1
+
+        return self.split.build_text_split_from_indexes(identification_start, identification_end).text
+
+    @classmethod
+    @abstractmethod
+    def _can_erase_number_pattern(cls):
+        pass
+
+    @abstractmethod
+    def split_item_for_further_processing(self):
+        pass
+
+
+class ArticleSplit(LegalUnitSplit):
+
+    def to_dict(self):
+        return {
+            'art_split': self.split.to_dict()
+        }
+
+    @classmethod
+    def from_dict(cls, dict_object: Mapping[str, Any]):
+        return ArticleSplit(
+            art_split=TextSplit.from_dict(dict_object['art_split'])
+        )
+
+    def __init__(self, art_split: TextSplit):
+        super().__init__(art_split)
+        self.legal_units_indeed: List[LegalUnitSplit] = []
+
+    def set_legal_indeed_units(self, legal_units_indeed: List[LegalUnitSplit]):
+        self.legal_units_indeed = legal_units_indeed
+
+    def split_item_for_further_processing(self):
+        match_of_identification = re.match(self._can_erase_number_pattern(), self.split.text)
+
+        to_erase_start = self.split.start_index + match_of_identification.start(0)
+        to_erase_end = self.split.start_index + match_of_identification.end(0) - 1
+
+        end_index = self.legal_units_indeed[0].split.start_index - 1 if len(self.legal_units_indeed) > 0 else \
+            self.split.end_index
+
+        if end_index < to_erase_end + 1:
+            return None
+
+        return self.split.build_text_split_from_indexes(to_erase_end + 1, end_index)
+
+    @classmethod
+    def _can_erase_number_pattern(cls):
+        return r'Art\.\s*(\d*\w*(?:–\d*\w*)?).\s*'
+
+
+class SectionSplit(LegalUnitSplit):
+
+    def __init__(self, split: TextSplit):
+        super().__init__(split)
+
+    @classmethod
+    def _can_erase_number_pattern(cls):
+        return r"^(?:[§<[]?)\s*(\d+[a-z]*)\s*\.\s*(?=\w|\[|\()"
+
+    def split_item_for_further_processing(self):
+        match_of_identification = re.match(self._can_erase_number_pattern(), self.split.text)
+
+        to_erase_start = self.split.start_index + match_of_identification.start(0)
+        to_erase_end = self.split.start_index + match_of_identification.end(0) - 1
+
+        return self.split.build_text_split_from_indexes(to_erase_end + 1, self.split.end_index)
+
+    def to_dict(self):
+        pass
+
+    @classmethod
+    def from_dict(cls, dict_object: Mapping[str, Any]):
+        pass
+
+
+class PointSplit(LegalUnitSplit):
+
+    def __init__(self, split: TextSplit):
+        super().__init__(split)
+
+    @classmethod
+    def _can_erase_number_pattern(cls):
+        pass
+
+    def split_item_for_further_processing(self) -> TextSplit | None:
+        pass
+
+    def to_dict(self):
+        pass
+
+    @classmethod
+    def from_dict(cls, dict_object: Mapping[str, Any]):
+        pass
 
 
 class TextChangesPiecesSplitter(ABC):
@@ -861,137 +1045,6 @@ class TextChangesPiecesSplitter(ABC):
 
     def __init__(self):
         pass
-
-    def get_pattern_for_text_with_brackets(self, action_type: StatusOfText):
-        return self.BEFORE_UPCOMING_CHANGE_PATTERN if action_type == StatusOfText.BEFORE_UPCOMING_CHANGE else self.UPCOMING_CHANGE_PATTERN
-
-    def _find_changes_text(self, legal_text: str, pattern_str: str, action_type: StatusOfText):
-        pattern = re.compile(pattern_str)
-        pattern_between_brackets = self.get_pattern_for_text_with_brackets(action_type)
-
-        changes = []
-        for match in pattern.finditer(legal_text):
-            is_text_between_brackets = re.match(pattern_between_brackets, match.group())
-            if is_text_between_brackets:
-                changes.append((match.start(), match.end(), is_text_between_brackets.group(1), action_type))
-            else:
-                raise GetTextBetweenBracketsError(f"Error during getting text between brackets in '{match.group()}'")
-        return changes
-
-    def _organise_text(self, text, before_upcoming_changes, after_upcoming_changes):
-        upcoming_changes = before_upcoming_changes + after_upcoming_changes
-        non_matches_of_not_upcoming_changes = self._find_non_matches(upcoming_changes, text)
-        all_pieces = self.sort_pieces_of_art_text(upcoming_changes + non_matches_of_not_upcoming_changes)
-        if self._are_pieces_overlap(all_pieces):
-            raise PassageSplitError("Upcoming changes are overlapping")
-        return [(left_i, right_i, text.strip(), action_type) for left_i, right_i, text, action_type in all_pieces]
-
-    def sort_pieces_of_art_text(self, pieces):
-        pieces.sort(key=lambda x: (x[0], x[1]))
-        return pieces
-
-    def _are_pieces_overlap(self, pieces):
-        for i in range(len(pieces) - 1):
-            if pieces[i][1] > pieces[i + 1][0]:
-                return True
-        return False
-
-    def _find_non_matches(self, upcoming_changes, art_text: str):
-        def add_non_match(prev_end, next_start):
-
-            if prev_end < next_start and art_text[prev_end:next_start].strip() != "":
-                return [(prev_end, next_start, art_text[prev_end:next_start], StatusOfText.NOT_MATCH_CHANGE)]
-            return []
-
-        sorted_upcoming_changes = self.sort_pieces_of_art_text(upcoming_changes)
-        non_matches = []
-        last_end = 0
-        for start, end, text, action_type in sorted_upcoming_changes:
-            non_matches += add_non_match(last_end, start)
-            last_end = end
-        non_matches += add_non_match(last_end, len(art_text))
-        return non_matches
-
-    def extract_parts(self, indentification: str) -> Tuple[int, str]:
-        # Use regex to extract numeric and alphabetic parts
-        match = re.match(r"(\d+)([a-z]?)", indentification)
-        if match:
-            num_part = int(match.group(1))  # Convert numeric part to an integer
-            alpha_part = match.group(2)  # Alphabetic part remains a string
-            return num_part, alpha_part
-
-        return int('inf'), ''  # Fallback if the regex fails
-
-    def is_ascending(self, indentification_numbers: List[str]):
-        # Extract parts for sorting
-        extracted_parts = [self.extract_parts(part_of_text_identification) for part_of_text_identification in
-                           indentification_numbers]
-        # Check if the list is sorted
-        return extracted_parts == sorted(extracted_parts)
-
-    def split(self, prev_split: TextSplit):
-        part_of_texts = self._organise_text(prev_split.text,
-                                            self._find_changes_text(prev_split.text,
-                                                                    self.before_upcoming_change_pattern(),
-                                                                    StatusOfText.BEFORE_UPCOMING_CHANGE),
-                                            self._find_changes_text(prev_split.text, self.upcoming_change_pattern(),
-                                                                    StatusOfText.UPCOMING_CHANGE)
-                                            )
-        splits: List[TextSplit] = []
-        for start_index, end_index, part_text, action_type in part_of_texts:
-            ## TODO check this way in the future
-            # matches = re.finditer(r'(Art\. \d+[a-zA-Z]?[\s\S]*?)(?=Art\. \d+[a-zA-Z]?|$)', part_text)
-            # for match in matches:
-            #     r = 4
-            #     w = match.group(0)
-            #     start_index = match.start()
-            #     end_index = match.end()
-            for split in self.split_function(part_text):
-                current_start_index = prev_split.start_index + prev_split.text.index(split)
-                current_end_index = current_start_index + len(split)
-                # if current_start_index == current_end_index:
-                #     ww = 4
-                if current_start_index == -1:
-                    raise PassageSplitError(f"Error during splitting text, cannot find start_index of split: {split}")
-                # rrr_text = text[current_start_index:current_end_index]
-                #
-                # prawda = rrr_text == split
-                r = 4
-
-                www = split[-10:]
-                if current_end_index > current_start_index:
-                    splits.append(
-                        TextSplit(text=split,
-                                  start_index=current_start_index,
-                                  end_index=current_end_index,
-                                  action_type=prev_split.action_type
-                                  if prev_split.action_type != StatusOfText.NOT_MATCH_CHANGE else action_type
-                                  )
-                    )
-        # for split in splits:
-        #     if self.can_erase_number(split):
-
-        return splits
-
-    def get_identificator_text(self, split: TextSplit):
-        if self.can_erase_number(split) is None:
-            raise EraseNumberError("Error during getting identificator text")
-        return re.findall(self.can_erase_number_pattern(), split.text)[0].strip()
-
-    def erase_identificator_from_text(self, split: TextSplit):
-        if self.can_erase_number(split) is None:
-            raise EraseNumberError("Error during getting identificator text")
-        match = re.search(self.can_erase_number_pattern(), split.text)
-        start_index = match.start()
-        end_index = match.end()
-        r = split.text[end_index:]
-        start_index = split.start_index + end_index
-        end_index = split.end_index
-        erased_text = re.sub(self.can_erase_number_pattern(), "", split.text).lstrip()
-        return TextSplit(text=erased_text, start_index=start_index, end_index=end_index, action_type=split.action_type)
-
-    def can_erase_number(self, split: TextSplit):
-        return re.match(self.can_erase_number_pattern(), split.text)
 
     @abstractmethod
     def can_erase_number_pattern(self):
@@ -1013,6 +1066,194 @@ class TextChangesPiecesSplitter(ABC):
     def process_text(self, text):
         pass
 
+    def get_pattern_for_text_with_brackets(self, action_type: StatusOfText):
+        return self.BEFORE_UPCOMING_CHANGE_PATTERN if action_type == StatusOfText.BEFORE_UPCOMING_CHANGE else self.UPCOMING_CHANGE_PATTERN
+
+    def _find_changes_text(self, text_split: TextSplit, pattern_str: str, action_type: StatusOfText) -> List[TextSplit]:
+        pattern = re.compile(pattern_str)
+        pattern_between_brackets = self.get_pattern_for_text_with_brackets(action_type)
+
+        splits_of_change = []
+        for match in pattern.finditer(text_split.text):
+            is_text_between_brackets = re.match(pattern_between_brackets, match.group())
+            match_group = match.group()
+            start_index_of_match = text_split.start_index + match.start()
+            end_index_of_match = text_split.start_index + match.end() - 1
+            text_from_split_chars = text_split.get_chars_from_indexes(start_index_of_match, end_index_of_match)
+            rr = ''.join(char.text for char in text_from_split_chars)
+            if rr == match_group:
+                r = 4
+            else:
+                w = 4
+
+            splits_of_change.append(
+                TextSplit(
+                    list(map(lambda char: CharTextSplit(char, action_type), text_from_split_chars)),
+                    action_type)
+            )
+        return splits_of_change
+
+    # def _organise_text(self, text, before_upcoming_changes, after_upcoming_changes):
+    #     upcoming_changes = before_upcoming_changes + after_upcoming_changes
+    #     non_matches_of_not_upcoming_changes = self._find_non_matches(upcoming_changes, text)
+    #     all_pieces = self.sort_pieces_of_art_text(upcoming_changes + non_matches_of_not_upcoming_changes)
+    #     if self._are_pieces_overlap(all_pieces):
+    #         raise PassageSplitError("Upcoming changes are overlapping")
+    #     return [(left_i, right_i, text.strip(), action_type) for left_i, right_i, text, action_type in all_pieces]
+
+    def sort_pieces_of_art_text(self, pieces):
+        pieces.sort(key=lambda x: (x[0], x[1]))
+        return pieces
+
+    def _are_pieces_overlap(self, pieces):
+        for i in range(len(pieces) - 1):
+            if pieces[i][1] > pieces[i + 1][0]:
+                return True
+        return False
+
+    # def _find_non_matches(self, upcoming_changes, art_text: str):
+    #     def add_non_match(prev_end, next_start):
+    #
+    #         if prev_end < next_start and art_text[prev_end:next_start].strip() != "":
+    #             return [(prev_end, next_start, art_text[prev_end:next_start], StatusOfText.NOT_MATCH_CHANGE)]
+    #         return []
+    #
+    #     sorted_upcoming_changes = self.sort_pieces_of_art_text(upcoming_changes)
+    #     non_matches = []
+    #     last_end = 0
+    #     for start, end, text, action_type in sorted_upcoming_changes:
+    #         non_matches += add_non_match(last_end, start)
+    #         last_end = end
+    #     non_matches += add_non_match(last_end, len(art_text))
+    #     return non_matches
+
+    def extract_parts(self, indentification: str) -> Tuple[int, str]:
+        # Use regex to extract numeric and alphabetic parts
+        match = re.match(r"(\d+)([a-z]?)", indentification)
+        if match:
+            num_part = int(match.group(1))  # Convert numeric part to an integer
+            alpha_part = match.group(2)  # Alphabetic part remains a string
+            return num_part, alpha_part
+
+        return int('inf'), ''  # Fallback if the regex fails
+
+    def is_ascending(self, indentification_numbers: List[str]):
+        # Extract parts for sorting
+        extracted_parts = [self.extract_parts(part_of_text_identification) for part_of_text_identification in
+                           indentification_numbers]
+        # Check if the list is sorted
+        return extracted_parts == sorted(extracted_parts)
+
+    @staticmethod
+    def is_splits_overlap(splits_from_prev_split: List[TextSplit], prev_split: TextSplit):
+        for i in range(len(splits_from_prev_split) - 1):
+            if splits_from_prev_split[i].end_index >= splits_from_prev_split[i + 1].start_index:
+                return True
+        if splits_from_prev_split[len(splits_from_prev_split) - 1].end_index == prev_split.end_index \
+                and splits_from_prev_split[0].start_index == prev_split.start_index:
+            return False
+        else:
+            return True
+
+    def _organise_text(self, prev_split: TextSplit, before_upcoming_changes_splits: List[TextSplit],
+                       after_upcoming_changes_splits: List[TextSplit]):
+        upcoming_changes_splits = before_upcoming_changes_splits + after_upcoming_changes_splits
+        not_matches = self._find_non_matches(upcoming_changes_splits, prev_split)
+        all_pieces = sorted(upcoming_changes_splits + not_matches, key=lambda x: (x.start_index, x.end_index))
+        if self.is_splits_overlap(all_pieces, prev_split):
+            raise RuntimeError("Pieces overlap")
+        return all_pieces
+
+    # def add_non_match(self, prev_end, next_start):
+    #
+    #     if prev_end < next_start and art_text[prev_end:next_start].strip() != "":
+    #         return [(prev_end, next_start, art_text[prev_end:next_start], StatusOfText.NOT_MATCH_CHANGE)]
+    #     return []
+
+    def _find_non_matches(self, upcoming_changes_splits: List[TextSplit], prev_split: TextSplit):
+
+        sorted_upcoming_changes = sorted(upcoming_changes_splits, key=lambda x: (x.start_index, x.end_index))
+        non_matches = []
+        last_end = prev_split.start_index
+        for upcoming_split in sorted_upcoming_changes:
+            if last_end < upcoming_split.start_index:
+                chars_without_status = prev_split.get_chars_from_indexes(last_end, upcoming_split.start_index - 1)
+                non_matches.append(
+                    TextSplit(
+                        prev_split.get_chars_from_indexes_and_set_status(
+                            last_end,
+                            upcoming_split.start_index - 1,
+                            StatusOfText.NOT_MATCH_CHANGE),
+                        action_type=StatusOfText.NOT_MATCH_CHANGE
+                    )
+                )
+                w = non_matches[len(non_matches) - 1].chars[len(non_matches[len(non_matches) - 1].chars) - 1]
+            last_end = upcoming_split.end_index + 1
+        if last_end <= prev_split.end_index:
+            non_matches.append(
+                TextSplit(
+                    prev_split.get_chars_from_indexes_and_set_status(
+                        last_end,
+                        prev_split.end_index,
+                        StatusOfText.NOT_MATCH_CHANGE),
+                    action_type=StatusOfText.NOT_MATCH_CHANGE
+                )
+            )
+            w = non_matches[len(non_matches) - 1].chars[len(non_matches[len(non_matches) - 1].chars) - 1]
+        return non_matches
+
+    # @staticmethod
+    # def get_chars_of_all_splits(splits_of_upcoming_changes: TextSplit):
+
+    def split_by_upcoming_changes(self, prev_split: TextSplit) -> List[TextSplit]:
+        before_change_splits = self._find_changes_text(prev_split,
+                                                       self.before_upcoming_change_pattern(),
+                                                       StatusOfText.BEFORE_UPCOMING_CHANGE)
+        after_change_splits = self._find_changes_text(prev_split, self.upcoming_change_pattern(),
+                                                      StatusOfText.UPCOMING_CHANGE)
+
+        splits_of_upcoming_changes = self._organise_text(
+            prev_split=prev_split,
+            before_upcoming_changes_splits=before_change_splits,
+            after_upcoming_changes_splits=after_change_splits
+        )
+
+        for index_split in range(len(splits_of_upcoming_changes)):
+            if splits_of_upcoming_changes[index_split].action_type == StatusOfText.BEFORE_UPCOMING_CHANGE or \
+                    splits_of_upcoming_changes[index_split].action_type == StatusOfText.UPCOMING_CHANGE:
+                pattern = self.get_pattern_for_text_with_brackets(splits_of_upcoming_changes[index_split].action_type)
+                is_text_between_brackets = re.match(pattern, splits_of_upcoming_changes[index_split].text)
+                start_index_without_brackets = is_text_between_brackets.start(1)
+                end_index_without_brackets = is_text_between_brackets.end(1)
+
+                chars_without_brackets = splits_of_upcoming_changes[index_split].chars[
+                                         start_index_without_brackets:end_index_without_brackets]
+
+                splits_of_upcoming_changes[index_split] = TextSplit(chars_without_brackets,
+                                                                    splits_of_upcoming_changes[index_split].action_type)
+
+        return splits_of_upcoming_changes
+
+    def get_identificator_text(self, split: TextSplit):
+        if self.can_erase_number(split) is None:
+            raise EraseNumberError("Error during getting identificator text")
+        return re.findall(self.can_erase_number_pattern(), split.text)[0].strip()
+
+    def erase_identificator_from_text(self, split: TextSplit):
+        if self.can_erase_number(split) is None:
+            raise EraseNumberError("Error during getting identificator text")
+        match = re.search(self.can_erase_number_pattern(), split.text)
+        start_index = match.start()
+        end_index = match.end()
+        r = split.text[end_index:]
+        start_index = split.start_index + end_index
+        end_index = split.end_index
+        erased_text = re.sub(self.can_erase_number_pattern(), "", split.text).lstrip()
+        return TextSplit(text=erased_text, start_index=start_index, end_index=end_index, action_type=split.action_type)
+
+    def can_erase_number(self, split: TextSplit):
+        return re.match(self.can_erase_number_pattern(), split.text)
+
 
 class ArticleSplitter(TextChangesPiecesSplitter):
     ERASE_FORMAT_legal_acts_structure_words_from_art_pattern = r'\s*(?=R\s*o\s*z\s*d\s*z\s*i\s*a\s*[łl]|D\s*Z\s*I\s*A\s*[ŁL]|O\s*d\s*d\s*z\s*i\s*a\s*[łl])'
@@ -1027,7 +1268,8 @@ class ArticleSplitter(TextChangesPiecesSplitter):
         return r"<\s*Art\.\s*\d+[a-zA-Z]*\.[^>\]\[]*>"  # <Art. 1.>
 
     def split_function(self, text):
-        return re.findall(r'(Art\. \d+[a-zA-Z]?[\s\S]*?)(?=Art\. \d+[a-zA-Z]?|$)', text)
+        return re.finditer(r'Art\. \d+[a-zA-Z]?[\s\S]*?(?=Art\. \d+[a-zA-Z]?|\Z)', text)
+        # return re.finditer(r'(Art\. \d+[a-zA-Z]?[\s\S]*?)(?=^Art\. \d+[a-zA-Z]?|\Z)', text)
 
     def can_erase_number_pattern(self):
         return r'Art\.\s*(\d*\w*(?:–\d*\w*)?).\s*'
@@ -1039,8 +1281,58 @@ class ArticleSplitter(TextChangesPiecesSplitter):
         return re.split(r'\s*(?=R\s*o\s*z\s*d\s*z\s*i\s*a\s*[łl]|D\s*Z\s*I\s*A\s*[ŁL]|O\s*d\s*d\s*z\s*i\s*a\s*[łl])',
                         act_text)[0].strip()
 
+    def split(self, prev_split: TextSplit):
+        before_change_splits = self._find_changes_text(prev_split,
+                                                       self.before_upcoming_change_pattern(),
+                                                       StatusOfText.BEFORE_UPCOMING_CHANGE)
+        after_change_splits = self._find_changes_text(prev_split, self.upcoming_change_pattern(),
+                                                      StatusOfText.UPCOMING_CHANGE)
 
-class PassageSplitter(TextChangesPiecesSplitter):
+        splits_of_upcoming_changes = self._organise_text(
+            prev_split=prev_split,
+            before_upcoming_changes_splits=before_change_splits,
+            after_upcoming_changes_splits=after_change_splits
+        )
+
+        art_splits = []
+        for index_split in range(len(splits_of_upcoming_changes)):
+            if splits_of_upcoming_changes[index_split].action_type == StatusOfText.BEFORE_UPCOMING_CHANGE or \
+                    splits_of_upcoming_changes[index_split].action_type == StatusOfText.UPCOMING_CHANGE:
+                pattern = self.get_pattern_for_text_with_brackets(splits_of_upcoming_changes[index_split].action_type)
+                is_text_between_brackets = re.match(pattern, splits_of_upcoming_changes[index_split].text)
+                start_index_without_brackets = is_text_between_brackets.start(1)
+                end_index_without_brackets = is_text_between_brackets.end(1)
+
+                chars_without_brackets = splits_of_upcoming_changes[index_split].chars[
+                                         start_index_without_brackets:end_index_without_brackets]
+
+                splits_of_upcoming_changes[index_split] = TextSplit(chars_without_brackets,
+                                                                    splits_of_upcoming_changes[index_split].action_type)
+
+            for match_of_upcoming_split in self.split_function(splits_of_upcoming_changes[index_split].text):
+
+                from_group_text = match_of_upcoming_split.group()
+                start_index_match = splits_of_upcoming_changes[
+                                        index_split].start_index + match_of_upcoming_split.start()
+                end_index_match = splits_of_upcoming_changes[
+                                      index_split].start_index + match_of_upcoming_split.end() - 1
+
+                art_split = splits_of_upcoming_changes[index_split].build_text_split_from_indexes(
+                    left_index=start_index_match,
+                    right_index=end_index_match
+                )
+
+                if not (art_split.text ==
+                        prev_split.build_text_split_from_indexes(start_index_match, end_index_match).text
+                        and art_split.text == from_group_text):
+                    raise RuntimeError(f"It fail due to incompatibility of split indexes art_split: {art_split.text} "
+                                       f"prev_split using indexes: {prev_split.build_text_split_from_indexes(start_index_match, end_index_match).text}")
+                art_splits.append(ArticleSplit(art_split))
+
+        return art_splits
+
+
+class SectionSplitter(TextChangesPiecesSplitter):
     def __init__(self):
         super().__init__()
 
@@ -1057,40 +1349,45 @@ class PassageSplitter(TextChangesPiecesSplitter):
 
         # return re.split(r'(?=[\sa-zA-Z[<]\d{1,}[a-z]*\.\s[\D(])', text)
         # return re.split(r'(?<![-–])(?<!pkt\s)(?<!ust\.\s)(?=\b\d+[a-zA-Z]?\.\s[\D(])', text)
-        return re.split(
-            r'(?:(?<=\.\s)|(?<=^)|(?<=\(uchylony\)\s)|(?<=\(uchylona\)\s)|(?<=\(pominięte\)\s)|(?<=\(pominięty\)\s))(?<![-–])(?<!pkt\s)(?<!ust\.\s)(?<!art\.\s)(?=(?:§\s*)*\b\d+[a-zA-Z]?\.\s[\D(])',
-            text)
+        # return re.finditer(
+        #     r'(?:(?<=\.\s)|(?<=^)|(?<=\(uchylony\)\s)|(?<=\(uchylona\)\s)|(?<=\(pominięte\)\s)|(?<=\(pominięty\)\s))(?<![-–])(?<!pkt\s)(?<!ust\.\s)(?<!art\.\s)(?=(?:[\<\[§]\s*)*\b\d+[a-zA-Z]?\.\s[\D(])',
+        #     text)
+        return re.finditer(
+            r'(?:(?<=\.\s)|(?<=^)|(?<=\(uchylony\)\s)|(?<=\(uchylona\)\s)|(?<=\(pominięte\)\s)|(?<=\(pominięty\)\s))(?<![-–])(?<!pkt\s)(?<!ust\.\s)(?<!art\.\s)((?:(?:[\<§\[]+\s*)?\d+[a-zA-Z]?\.\s[\s\S]*?)(?=(?:(?<=\.\s)|(?<=\(uchylony\)\s)|(?<=\(uchylona\)\s)|(?<=\(pominięte\)\s)|(?<=\(pominięty\)\s))?(?<![-–])(?<!pkt\s)(?<!ust\.\s)(?<!art\.\s)(?:[\<§\[]+\s*)?\d+[a-zA-Z]?\.\s|\Z))',
+            text, flags=re.DOTALL | re.MULTILINE)
 
     def can_erase_number_pattern(self):
         # return r"^\s*(\d+[a-z]*)\s*\.\s*(?=\w|\[|\()"
-        return r"^(?:[§]?)\s*(\d+[a-z]*)\s*\.\s*(?=\w|\[|\()"
+        return r"^(?:[§<[]?)\s*(\d+[a-z]*)\s*\.\s*(?=\w|\[|\()"
 
     def process_text(self, text):
         return self.remove_redudant_section_sign(
             self.standardize_section_reference_keyword(text)
         )
 
-    # def map_splits_from_api_retry(self, passage_splits: List):
-    #     def process_split(passage_split_text):
-    #         if re.match(self.get_pattern_for_text_with_brackets(self.BEFORE_UPCOMING_CHANGE), passage_split_text):
-    #             return {
-    #                 "text": re.match(self.get_pattern_for_text_with_brackets(self.BEFORE_UPCOMING_CHANGE),
-    #                                  passage_split_text).group(1).strip(),
-    #                 "action_type": self.BEFORE_UPCOMING_CHANGE
-    #             }
-    #         elif re.match(self.get_pattern_for_text_with_brackets(self.UPCOMING_CHANGE), passage_split_text):
-    #             return {
-    #                 "text": re.match(self.get_pattern_for_text_with_brackets(self.UPCOMING_CHANGE),
-    #                                  passage_split_text).group(1).strip(),
-    #                 "action_type": self.UPCOMING_CHANGE
-    #             }
-    #         else:
-    #             return {
-    #                 "text": passage_split_text.strip(),
-    #                 "action_type": self.NOT_MATCH_CHANGE
-    #             }
-    #
-    #     return list(map(process_split, passage_splits))
+    def split(self, art_split: ArticleSplit):
+
+        prev_split = art_split.split_item_for_further_processing()
+
+        splits_of_upcoming_changes = self.split_by_upcoming_changes(prev_split)
+        sections_splits = []
+        for index_split in range(len(splits_of_upcoming_changes)):
+            for match_of_upcoming_split in self.split_function(splits_of_upcoming_changes[index_split].text):
+                from_group_text = match_of_upcoming_split.group()
+                start_index_match = splits_of_upcoming_changes[
+                                        index_split].start_index + match_of_upcoming_split.start()
+                end_index_match = splits_of_upcoming_changes[
+                                      index_split].start_index + match_of_upcoming_split.end() - 1
+
+                passage_split = splits_of_upcoming_changes[index_split].build_text_split_from_indexes(
+                    left_index=start_index_match,
+                    right_index=end_index_match
+                )
+                sections_splits.append(SectionSplit(passage_split))
+
+                r = 4
+        art_split.set_legal_indeed_units(sections_splits)
+        return art_split
 
     def remove_redudant_section_sign(self, passage_text):
         return passage_text.strip().rstrip("§") if passage_text.rstrip().endswith('§') \
@@ -1099,6 +1396,48 @@ class PassageSplitter(TextChangesPiecesSplitter):
     def standardize_section_reference_keyword(self, passage_text):
         return passage_text.replace('§', 'ust.')
 
+
+class PointSplitter(TextChangesPiecesSplitter):
+
+
+
+    def __init__(self):
+        super().__init__()
+
+    def before_upcoming_change_pattern(self):
+        return r"\[\s*\d+[a-zA-Z]?\)[^\[\]<>]*\]"
+
+    def upcoming_change_pattern(self):
+        return r"<\s*\d+[a-zA-Z]?\)[^<>\[\]]*>"
+
+    def can_erase_number_pattern(self):
+        pass
+
+    def split_function(self, text):
+        return re.finditer(
+            r'(?:(?<=^)(?!str\.|poz\.)|(?<=;\s))(?!str\.|poz\.)(\d+[a-z]?\)\s(?:.*\n?)*?)(?=^(?<=;\s)(?!str\.|poz\.)\d+[a-z]?\)|\Z)',
+            text,
+            flags=re.DOTALL | re.MULTILINE
+        )
+
+    def process_text(self, text):
+        pass
+
+    def split(self, art_split: ArticleSplit):
+
+        prev_split_of_art = art_split.split_item_for_further_processing()
+        if prev_split_of_art:
+            splits_of_upcoming_changes = self.split_by_upcoming_changes(prev_split_of_art)
+
+        for section_split in art_split.legal_units_indeed:
+            if isinstance(section_split, SectionSplit):
+                prev_split_section = section_split.split_item_for_further_processing()
+
+                rrr = list(self.split_function(prev_split_section.text))
+
+                r = 4
+
+        w = 4
 
 class MultiLineTextLLMObject(BaseModel):
     text: str
@@ -1129,10 +1468,96 @@ class ArticleTemp:
 
 class EstablishPartsOfLegalActs(FlowStep):
     article_splitter = ArticleSplitter()
-    passage_splitter = PassageSplitter()
+    section_splitter = SectionSplitter()
+    subpoint_splitter = PointSplitter()
+
+    @staticmethod
+    def get_paragraph_text(pages: List[LegalActPage]):
+        return "".join(page.paragraph_text for page in pages)
+
+    @staticmethod
+    def get_chars_of_paragraph(pages: List[LegalActPage]):
+        chars = []
+        for page in pages:
+            for line_paragraph in page.paragraph_lines:
+                if isinstance(line_paragraph, TextLinePageLegalAct):
+                    for line_char in line_paragraph.chars:
+                        chars.append(line_char)
+                elif isinstance(line_paragraph, TableRegionPageLegalAct):
+                    width_char_table = round(
+                        round(line_paragraph.end_x, 2) - round(line_paragraph.start_x, 2) / len(line_paragraph.text), 2)
+                    for char_index in range(len(line_paragraph.text)):
+                        char_obj = CharLegalAct(
+                            x0=line_paragraph.start_x + char_index * width_char_table,
+                            x1=max(line_paragraph.start_x + (char_index + 1) * width_char_table, line_paragraph.end_x),
+                            bottom=line_paragraph.end_y,
+                            top=line_paragraph.start_y,
+                            text=line_paragraph.text[char_index],
+                            index_in_legal_act=line_paragraph.index_in_act + char_index,
+                            page_number=page.page_number
+                        )
+                        chars.append(char_obj)
+                for char_index, char_delimiter in enumerate(OrderedObjectLegalAct.LINE_DELIMITER):
+                    char_obj = CharLegalAct(
+                        x0=line_paragraph.end_x,
+                        x1=line_paragraph.end_x,
+                        bottom=line_paragraph.end_y,
+                        top=line_paragraph.start_y,
+                        text=char_delimiter,
+                        index_in_legal_act=line_paragraph.end_index + char_index,
+                        page_number=page.page_number
+                    )
+                    chars.append(char_obj)
+
+        return chars
+
+    @staticmethod
+    def text_from_chars(legal_chars: List[CharLegalAct]):
+        return ''.join(char.text for char in legal_chars)
 
     @classmethod
-    def split_legal_act(cls, row_with_details: EstablishLegalWithTablesResult, pdf_content: io.BytesIO):
+    def split_legal_act(cls, general_info: GeneralInfo, pages: List[LegalActPage], pdf_content: io.BytesIO):
+
+        paragraph_document_text = cls.get_paragraph_text(pages)
+
+        document_chars = cls.get_chars_of_paragraph(pages)
+
+        paragraph_text = cls.text_from_chars(document_chars)
+
+        f = cls.article_splitter.split_function(paragraph_text)
+
+        rr = TextSplit(
+            list(map(lambda char: CharTextSplit(char, StatusOfText.NOT_MATCH_CHANGE), document_chars)),
+            StatusOfText.NOT_MATCH_CHANGE
+        )
+        ## TODO is ready step
+        # art_splits = cls.article_splitter.split(rr)
+        #
+        uri = "mongodb+srv://superUser:awglm12345@serverlessinstance0.vxbabj8.mongodb.net/?retryWrites=true&w=majority&appName=ServerlessInstance0"
+
+        db_name = "preprocessing_legal_acts_texts"
+        mongo_client = MongoClient(uri, server_api=ServerApi('1'))
+        mongo_db = mongo_client[db_name]
+        collection = mongo_db["article_splits"]
+        #
+        # collection.insert_many(
+        #     [split.to_dict() for split in art_splits]
+        # )
+
+        rows = collection.find()
+
+        art_splits_from_mongo = list(map(lambda art_split: ArticleSplit.from_dict(art_split), rows))
+
+        # cls.section_splitter.split(art_splits_from_mongo[265])
+        # cls.section_splitter.split(art_splits_from_mongo[0])
+        art_split = cls.section_splitter.split(art_splits_from_mongo[184])
+        cls.subpoint_splitter.split(art_split)
+        # text_split = TextSplit(
+        #
+        # )
+        # cls.article_splitter.split(paragraph_document_text)
+
+        r = 4
 
         legal_act_page_info_tab, legal_text_concatenated = LegalActLineDivision.create_lines_of_doc(
             row_with_details.page_regions, row_with_details.tables_regions, pdf_content, row_with_details)
@@ -1154,7 +1579,7 @@ class EstablishPartsOfLegalActs(FlowStep):
     @classmethod
     def split_passage(cls, row_with_details: EstablishLegalWithTablesResult, art_number, art_split: TextSplit,
                       legal_text_all: str):
-        passage_splits = cls.passage_splitter.split(art_split)
+        passage_splits = cls.section_splitter.split(art_split)
         cls.process_passages(row_with_details, art_number, art_split, passage_splits, legal_text_all)
         rr = 4
 
@@ -1179,16 +1604,16 @@ class EstablishPartsOfLegalActs(FlowStep):
         passage_numbers = []
         passage_texts = []
         for index_split, passage_split in enumerate(passage_splits):
-            is_passage = cls.passage_splitter.can_erase_number(passage_split)
+            is_passage = cls.section_splitter.can_erase_number(passage_split)
             if index_split == 0 and not is_passage:
                 art_text, subpoints = cls.split_subpoint(
                     passage_number=None,
                     passage_for_further_split=passage_split
                 )
             elif is_passage:
-                passage_number = cls.passage_splitter.get_identificator_text(passage_split)
+                passage_number = cls.section_splitter.get_identificator_text(passage_split)
                 passage_numbers.append(passage_number)
-                cleaned_passage_text_split = cls.passage_splitter.erase_identificator_from_text(passage_split)
+                cleaned_passage_text_split = cls.section_splitter.erase_identificator_from_text(passage_split)
                 if cleaned_passage_text_split.text.strip() == '':
                     collection.insert_one({
                         "ELI": row_with_details.general_info.ELI,
@@ -1210,7 +1635,7 @@ class EstablishPartsOfLegalActs(FlowStep):
                     "passage_split": passage_split.text,
                     "type": "passage is not a passage"
                 })
-        if not cls.passage_splitter.is_ascending(passage_numbers):
+        if not cls.section_splitter.is_ascending(passage_numbers):
             collection.insert_one({
                 "ELI": row_with_details.general_info.ELI,
                 "art_number": art_number,
@@ -1228,24 +1653,40 @@ class EstablishPartsOfLegalActs(FlowStep):
     @retry_dask_task(retries=3, delay=10)
     def worker_task(cls, row: Dict[str, str]):
         try:
-            row_with_details: EstablishLegalWithTablesResult = EstablishLegalWithTablesResult \
-                .from_dict(
-                get_mongodb_collection(
-                    db_name="preprocessing_legal_acts_texts",
-                    collection_name="legal_act_page_metadata"
-                ).find_one(
-                    {
-                        "general_info.ELI": row['ELI'],
-                        # "invoke_id": row[DAG_TABLE_ID]
-                        "invoke_id": row[DAG_TABLE_ID]
-                    },
-                    {"_id": 0}
-                )
+            rows = get_mongodb_collection(
+                db_name="preprocessing_legal_acts_texts",
+                collection_name="legal_act_page_metadata"
+            ).find_many(
+                {
+                    "general_info.ELI": row['ELI'],
+                    # "invoke_id": row[DAG_TABLE_ID]
+                    "invoke_id": row[DAG_TABLE_ID]
+                },
+                {"_id": 0}
             )
-            bucket, key = extract_bucket_and_key(row_with_details.general_info.s3_pdf_path)
+            pages_of_document = list(map(lambda doc: LegalActPageMetadata.from_dict(doc).page, rows))
+            general_info_document = next(map(lambda doc: LegalActPageMetadata.from_dict(doc), rows)).general_info
+            s3_pdf_path = general_info_document.s3_pdf_path
+
+            # row_with_details: List[LegalActPageMetadata] = LegalActPageMetadata \
+            #     .from_dict(
+            #     get_mongodb_collection(
+            #         db_name="preprocessing_legal_acts_texts",
+            #         collection_name="legal_act_page_metadata"
+            #     ).find_one(
+            #         {
+            #             "general_info.ELI": row['ELI'],
+            #             # "invoke_id": row[DAG_TABLE_ID]
+            #             "invoke_id": row[DAG_TABLE_ID]
+            #         },
+            #         {"_id": 0}
+            #     )
+            # )
+            s = 4
+            bucket, key = extract_bucket_and_key(s3_pdf_path)
             pdf_content = io.BytesIO(
                 boto3.client('s3', region_name=AWS_REGION).get_object(Bucket=bucket, Key=key)['Body'].read())
-            cls.split_legal_act(row_with_details, pdf_content)
+            cls.split_legal_act(general_info_document, pages_of_document, pdf_content)
             s = 4
         finally:
             gc.collect()
@@ -1264,10 +1705,10 @@ class EstablishPartsOfLegalActs(FlowStep):
 
         # DU/2011/696
 
-        selected_ddf = ddf_eli_documents[
-            ddf_eli_documents["ELI"] == "DU/2011/696"].compute()
         # selected_ddf = ddf_eli_documents[
-        #     ddf_eli_documents["ELI"] == "DU/1997/604"].compute()
+        #     ddf_eli_documents["ELI"] == "DU/2011/696"].compute()
+        selected_ddf = ddf_eli_documents[
+            ddf_eli_documents["ELI"] == "DU/2009/1240"].compute()
         # selected_ddf = ddf_eli_documents[
         #     ddf_eli_documents["ELI"] == "DU/1984/268"].compute()
         # selected_ddf = ddf_eli_documents[
@@ -1519,6 +1960,9 @@ def preprocessing_api():
     WORKERS_SERVICE = "Dask-Workers"
     #
 
+    dask_cluster = CreateLocalDaskCluster.run(
+        num_workers=3
+    )
     R = 4
     ## TODO when we start flow define if stack name already exist, omit creation of stack
     # dask_cluster = CreateDaskCluster.run(
@@ -1551,7 +1995,7 @@ def preprocessing_api():
 
     # dask_cluster = None
 
-    client = Client(dask_cluster.cluster_url)
+    client = Client(dask_cluster.get_cluster_url())
     # client = Client('idealistic-manul-TCP-0cd4f6af06afc9d5.elb.eu-west-1.amazonaws.com:8786')
     # client = Client("tcp://localhost:8786")
 
@@ -1561,8 +2005,8 @@ def preprocessing_api():
 
     # ss = download_raw_rows_for_each_year(flow_information=flow_information, dask_client=client, type_document="DU")
     # TODO UNCOMMENT THIS STAGE LATER
-    path_to_raw_rows = DownloadRawRowsForEachYear.run(flow_information=flow_information, dask_client=client,
-                                                      type_document="DU")
+    # path_to_raw_rows = DownloadRawRowsForEachYear.run(flow_information=flow_information, dask_client=client,
+    #                                                   type_document="DU")
 
     r = 4
     #
@@ -1570,20 +2014,20 @@ def preprocessing_api():
     path_to_raw_rows = 's3://datalake-bucket-123/api-sejm/a04e9d3d-1890-42cc-8cf5-3d190eb617c3/DU/*.parquet'
     # ## here we start new flow for test
     # TODO UNCOMMENT THIS STAGE LATER
-    path_to_rows = GetRowsOfLegalActsForPreprocessing.run(flow_information=flow_information,
-                                                          dask_client=client,
-                                                          s3_path=path_to_raw_rows)
+    # path_to_rows = GetRowsOfLegalActsForPreprocessing.run(flow_information=flow_information,
+    #                                                       dask_client=client,
+    #                                                       s3_path=path_to_raw_rows)
 
     # path_to_rows = 's3://datalake-bucket-123/stages/$049eec07-0322-4530-a135-f66719696ede/GetRowsOfLegalActsForPreprocessing/rows_filtered.parquet.gzip'
 
     r = 4
     #
     # TODO UNCOMMENT THIS STAGE LATER
-    path_DULegalDocumentsMetaData_rows = FilterRowsFromApiAndUploadToParquetForFurtherProcessing.run(
-        flow_information=flow_information,
-        dask_client=client,
-        workers_count=3,
-        s3_path_parquet=path_to_rows)
+    # path_DULegalDocumentsMetaData_rows = FilterRowsFromApiAndUploadToParquetForFurtherProcessing.run(
+    #     flow_information=flow_information,
+    #     dask_client=client,
+    #     workers_count=3,
+    #     s3_path_parquet=path_to_rows)
 
     R = 4
 
@@ -1632,7 +2076,7 @@ def preprocessing_api():
     path_to_parquet_line_divisions = 's3://datalake-bucket-123/stages/$99be0778-14a7-45f8-9eac-5283278dc945/LegalActLineDivision/results.parquet.gzip'
 
     path_to_parquet_legal_parts = EstablishPartsOfLegalActs.run(
-        flow_information=flow_information, dask_client=client, workers_count=8,
+        flow_information=flow_information, dask_client=client, workers_count=dask_cluster.get_workers_count(),
         s3_path_parquet_with_eli_documents=path_to_parquet_line_divisions
     )
 
@@ -1650,10 +2094,10 @@ def preprocessing_api():
     #
     # )
 
-    path_to_eli_documents_with_extracted_text = ExtractTextAndGetPagesWithTables.run(flow_information=flow_information,
-                                                                                     dask_client=client,
-                                                                                     workers_count=dask_cluster.get_workers_count(),
-                                                                                     s3_path_parquet_with_legal_document_rows=path_to_parquet_for_legal_documents_with_s3_pdf)
+    # path_to_eli_documents_with_extracted_text = ExtractTextAndGetPagesWithTables.run(flow_information=flow_information,
+    #                                                                                  dask_client=client,
+    #                                                                                  workers_count=dask_cluster.get_workers_count(),
+    #                                                                                  s3_path_parquet_with_legal_document_rows=path_to_parquet_for_legal_documents_with_s3_pdf)
 
     # path_to_eli_documents_with_extracted_text = 's3://datalake-bucket-123/stages/$6129d63e-e933-4dcd-9f0a-a809c1cd7464/ExtractTextAndGetPagesWithTables/results.parquet.gzip'
 
@@ -1870,3 +2314,5 @@ if __name__ == "__main__":
     # log_repo_info()
     # my_flow()
     # elevator()
+
+# %%

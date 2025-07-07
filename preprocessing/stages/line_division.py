@@ -186,6 +186,13 @@ class LegalActLineDivision(FlowStep):
                                                        'invoke_id': pd.Series(dtype='str')
                                                    })
                                                    )
+        # ## TODO Remove it later
+        # selected_ddf = ddf_eli_documents[
+        #     ddf_eli_documents["ELI"] == "DU/2011/696"].compute()
+        selected_ddf = ddf_eli_documents[
+            ddf_eli_documents["ELI"] == "DU/2009/1240"].compute()
+
+        r = cls.worker_task(row=selected_ddf.iloc[0].to_dict())
 
         delayed_tasks = ddf_eli_documents.map_partitions(
             lambda df: [

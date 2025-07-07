@@ -11,7 +11,7 @@ from pdfplumber.table import Table
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 
-from preprocessing.kkk import ArticleTemp, StatusOfText, TextSplit, ArticleSplitter, PassageSplitter, \
+from preprocessing.kkk import ArticleTemp, StatusOfText, TextSplit, ArticleSplitter, SectionSplitter, \
     get_mongodb_collection, MultiLineTextExtractor, LegalActPage
 from preprocessing.pdf_boundaries.margin_boundaries import LegalActMarginArea
 from preprocessing.pdf_boundaries.paragraph_boundaries import LegalActParagraphArea, ParagraphAreaType
@@ -147,7 +147,7 @@ def declare_part_of_legal_act(document_name: str, pdf_bytes: io.BytesIO):
 
 
 article_splitter = ArticleSplitter()
-passage_splitter = PassageSplitter()
+passage_splitter = SectionSplitter()
 
 
 def get_pages_info(page_regions: PageRegions):

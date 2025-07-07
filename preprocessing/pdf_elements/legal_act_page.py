@@ -25,6 +25,22 @@ class LegalActPage(MongodbObject):
         self.margin_lines = margin_lines
 
     @property
+    def paragraph_text(self):
+        return self.get_text_of_area(self.paragraph_lines)
+
+    @property
+    def footer_text(self):
+        return self.get_text_of_area(self.footer_lines)
+
+    @property
+    def margin_text(self):
+        return self.get_text_of_area(self.margin_lines)
+
+    @staticmethod
+    def get_text_of_area(lines: List[OrderedObjectLegalAct]):
+        return ''.join(p.text + OrderedObjectLegalAct.LINE_DELIMITER for p in lines)
+
+    @property
     def len_paragraph_lines(self):
         return self.get_len_of_lines(self.paragraph_lines)
 

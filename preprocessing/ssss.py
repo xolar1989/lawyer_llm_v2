@@ -3,6 +3,9 @@ import pandas as pd
 import dask.dataframe as dd
 import numpy as np
 
+
+print(len("\n"))
+
 print(dask.config.get("dataframe.convert-string"))
 
 dask.config.set({"dataframe.convert-string": False})

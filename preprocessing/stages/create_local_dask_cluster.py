@@ -7,10 +7,9 @@ class CreateLocalDaskCluster(FlowStep):
     dask_cluster: DaskCluster = None
 
     @classmethod
-    @FlowStep.step(task_run_name='create_local_dask_cluster')
+    @FlowStep.step(task_run_name='create_local_dask_cluster', cache_result_in_memory=False, persist_result=False)
     def run(cls, num_workers) -> DaskCluster:
-        return LocalDaskCluster \
-            .build(num_workers=num_workers)
+        return LocalDaskCluster.build(num_workers=num_workers)
 
     @classmethod
     def rollback(cls, exception: FlowStepError):

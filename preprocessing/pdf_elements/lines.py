@@ -190,7 +190,8 @@ class TextLinePageLegalAct(OrderedObjectLegalAct):
                 bottom=line_dict['bottom'],
                 top=line_dict['top'],
                 text=text_llm_line[char_index],
-                index_in_legal_act=current_index + char_index
+                index_in_legal_act=current_index + char_index,
+                page_number=page.page_number
             )
             char_obj_list.append(char_obj)
         return cls(
@@ -239,7 +240,8 @@ class TextLinePageLegalAct(OrderedObjectLegalAct):
                     bottom=char_in_chars['bottom'],
                     top=char_in_chars['top'],
                     text=text_for_obj_char,
-                    index_in_legal_act=current_index + char_index
+                    index_in_legal_act=current_index + char_index,
+                    page_number=page.page_number
                 )
                 char_obj_list.append(char_obj)
                 x1_last = char_in_chars['x1']
@@ -257,7 +259,8 @@ class TextLinePageLegalAct(OrderedObjectLegalAct):
                     bottom=line_dict['bottom'],
                     top=line_dict['top'],
                     text=char_text,
-                    index_in_legal_act=current_index + char_index
+                    index_in_legal_act=current_index + char_index,
+                    page_number=page.page_number
                 )
                 char_obj_list.append(char_obj)
 
@@ -297,7 +300,8 @@ class TextLinePageLegalAct(OrderedObjectLegalAct):
                 bottom=line_dict['bottom'],
                 top=line_dict['top'],
                 text=char,
-                index_in_legal_act=current_index + char_index
+                index_in_legal_act=current_index + char_index,
+                page_number=page.page_number
             )
             char_obj_list.append(char_obj)
         return cls(

@@ -22,6 +22,8 @@ class LocalDaskCluster(DaskCluster):
               timeout: int = 40
               ):
 
+        s = 4
+
         cls.run_docker_compose(
             compose_file=compose_file,
             services=services,
