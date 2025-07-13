@@ -25,7 +25,7 @@ from preprocessing.pdf_utils.multiline_extractor import MultiLineTextExtractor
 from preprocessing.pdf_utils.table_utils import TableDetector
 from preprocessing.utils.attachments_extraction import PageRegions
 from preprocessing.dask.fargate_dask_cluster import retry_dask_task
-from preprocessing.utils.defaults import AWS_REGION
+from preprocessing.utils.defaults import AWS_REGION, DAG_TABLE_ID
 from preprocessing.utils.page_regions import LegalActPageRegionFooterNotes, LegalActPageRegionMarginNotes
 from preprocessing.utils.s3_helper import extract_bucket_and_key
 from preprocessing.utils.stage_def import FlowStep
@@ -114,7 +114,7 @@ class LegalActLineDivision(FlowStep):
                         "general_info.ELI": row['ELI'],
                         # "invoke_id": row[DAG_TABLE_ID]
                         # "invoke_id": row[DAG_TABLE_ID]
-                        "invoke_id": row["invoke_id"]
+                        "invoke_id": row[DAG_TABLE_ID]
                     },
                     {"_id": 0}
                 )
@@ -132,8 +132,6 @@ class LegalActLineDivision(FlowStep):
                 except Exception as e:
                     ## TODO the most problematic for openai: DU/2009/1240
 
-
-
                     aws_logger.error("Remote error:\n%s", traceback.format_exc())
                     if attempt == cls.MAX_RETRY:
                         collection_db = get_mongodb_collection(
@@ -147,7 +145,11 @@ class LegalActLineDivision(FlowStep):
                                 "error": str(e)
                             }
                         )
-                        return row
+                        return {
+                            'ELI': row['ELI'],
+                            'invoke_id': row[DAG_TABLE_ID],
+                            'status': 'failed'
+                        }
 
                     raise RuntimeError(
                         f"Error while processing PDF: {row_with_details.general_info.s3_pdf_path} "
@@ -165,7 +167,6 @@ class LegalActLineDivision(FlowStep):
                     ).to_dict()
                 )
 
-
             get_mongodb_collection(
                 db_name="preprocessing_legal_acts_texts",
                 collection_name="legal_act_page_metadata"
@@ -173,7 +174,11 @@ class LegalActLineDivision(FlowStep):
 
         finally:
             gc.collect()
-        return row
+        return {
+            'ELI': row['ELI'],
+            'invoke_id': row[DAG_TABLE_ID],
+            'status': 'success'
+        }
 
     @classmethod
     @FlowStep.step(task_run_name='define_legal_acts_lines')
@@ -189,10 +194,10 @@ class LegalActLineDivision(FlowStep):
         # ## TODO Remove it later
         # selected_ddf = ddf_eli_documents[
         #     ddf_eli_documents["ELI"] == "DU/2011/696"].compute()
-        selected_ddf = ddf_eli_documents[
-            ddf_eli_documents["ELI"] == "DU/2009/1240"].compute()
+        # selected_ddf = ddf_eli_documents[
+        #     ddf_eli_documents["ELI"] == "DU/2009/1240"].compute()
 
-        r = cls.worker_task(row=selected_ddf.iloc[0].to_dict())
+        # r = cls.worker_task(row=selected_ddf.iloc[0].to_dict())
 
         delayed_tasks = ddf_eli_documents.map_partitions(
             lambda df: [
@@ -218,8 +223,14 @@ class LegalActLineDivision(FlowStep):
             who_has = dask_client.who_has(future)
             aws_logger.info(f"Task {future.key} executed on workers: {who_has}")
 
-        result_df = pd.DataFrame(results)
+        successful_rows = [r for r in results if r['status'] == 'success']
+        failed_rows = [r for r in results if r['status'] == 'failed']
 
-        results_ddf = dd.from_pandas(result_df, npartitions=workers_count)
+        successful_df = pd.DataFrame(successful_rows).drop(columns=['status'])
+        failed_df = pd.DataFrame(failed_rows).drop(columns=['status'])
 
-        return cls.save_result_to_datalake(results_ddf, flow_information, cls)
+        successful_result_ddf = dd.from_pandas(successful_df, npartitions=workers_count)
+        failed_result_ddf = dd.from_pandas(failed_df, npartitions=workers_count)
+
+        return cls.save_result_to_datalake(successful_result_ddf, flow_information, cls, result_name="successful_results"), \
+            cls.save_result_to_datalake(failed_result_ddf, flow_information, cls, result_name="failed_results")

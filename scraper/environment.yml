@@ -1,0 +1,17 @@
+name: scraper-env
+channels:
+  - defaults
+  - conda-forge
+channel_priority: strict
+dependencies:
+  - python=3.10.6
+  - pdfplumber=0.11.5
+  - requests
+  - pandas=1.5.0
+  - pip
+  - pip:
+      - numpy
+      - pymongo
+      - selenium-wire
+      - selenium
+      - blinker==1.7.0

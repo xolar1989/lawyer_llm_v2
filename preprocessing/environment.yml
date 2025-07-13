@@ -47,4 +47,5 @@ dependencies:
       - aioitertools
       - tqdm
       - python-dotenv
+      - natsort
 

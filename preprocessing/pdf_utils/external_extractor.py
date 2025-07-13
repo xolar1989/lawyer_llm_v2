@@ -120,10 +120,15 @@ class ExternalTextExtractor(ABC):
             },
             upsert=True
         )
-        # tracemalloc.stop()
-        aws_logger.error(
+        raise RuntimeError(
             f"❌ Failed to render cropped image after {max_retries} attempts "
             f"for ELI: {document_id}, page_number: {page.page_number}, invoke_id: {invoke_id}, "
             f"bbox: {crop_bbox} (last resolution tried: {current_resolution + 150})"
         )
-        return None
+        # tracemalloc.stop()
+        # aws_logger.error(
+        #     f"❌ Failed to render cropped image after {max_retries} attempts "
+        #     f"for ELI: {document_id}, page_number: {page.page_number}, invoke_id: {invoke_id}, "
+        #     f"bbox: {crop_bbox} (last resolution tried: {current_resolution + 150})"
+        # )
+        # return None

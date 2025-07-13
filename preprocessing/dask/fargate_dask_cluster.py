@@ -1,6 +1,7 @@
 import inspect
 import logging
 import time
+import traceback
 import uuid
 from functools import wraps
 from types import FunctionType
@@ -386,6 +387,7 @@ def retry_dask_task(retries: int = 3, delay: int = 5):
                 except Exception as e:
                     attempt += 1
                     func_name = func.__name__
+                    traceback.print_exc()
                     logger.warning(
                         f"Function '{func_name}' - Attempt {attempt} failed: {str(e)}. Retrying in {delay} seconds...")
                     time.sleep(delay)

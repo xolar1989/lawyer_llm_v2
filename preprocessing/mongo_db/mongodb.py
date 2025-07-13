@@ -182,4 +182,25 @@ def get_mongodb_collection(db_name, collection_name):
                         unique=True)
                 ]
             )
+        elif collection_name == "document_splitting_error":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("ELI", ASCENDING), ("invoke_id", ASCENDING)],
+                        unique=True)
+                ]
+            )
+    if db_name == "datasets":
+        if collection_name == "legal_acts_articles":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("unit_id", ASCENDING), ("metadata.ELI", ASCENDING), ("metadata.invoke_id", ASCENDING)],
+                        unique=True)
+                ]
+            )
     raise Exception("Invalid db_name or collection_name Mongodb error")
