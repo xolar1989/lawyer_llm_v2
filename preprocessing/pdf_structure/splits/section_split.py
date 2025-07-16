@@ -1,4 +1,5 @@
 import re
+from dataclasses import dataclass
 from typing import List
 
 from preprocessing.pdf_structure.splits.point_split import PointSplit
@@ -6,6 +7,7 @@ from preprocessing.pdf_structure.splits.text_split import TextSplit
 from preprocessing.pdf_structure.splits.unit_split import LegalUnitSplit
 
 
+@dataclass
 class SectionSplit(LegalUnitSplit):
 
     def __init__(self, split: TextSplit):
@@ -17,7 +19,7 @@ class SectionSplit(LegalUnitSplit):
 
     @classmethod
     def _can_erase_number_pattern(cls):
-        return r"^(?:[§<[]?)\s*(\d+[a-z]*)\s*\.\s*(?=\w|\[|\()"
+        return r"^(?:[§<[]?)\s*(\d+[a-zA-Z⁰¹²³⁴⁵⁶⁷⁸⁹]*)\s*\.\s*(?=[A-ZĄĆĘŁŃÓŚŹŻ⁰¹²³⁴⁵⁶⁷⁸⁹⁾]|\[|\()"
 
     def split_item_for_further_processing(self):
         match_of_identification = re.match(self._can_erase_number_pattern(), self.split.text)

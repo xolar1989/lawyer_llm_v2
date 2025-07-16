@@ -1,10 +1,12 @@
 import re
+from dataclasses import dataclass
 from typing import List
 
 from preprocessing.pdf_structure.splits.text_split import TextSplit
 from preprocessing.pdf_structure.splits.unit_split import LegalUnitSplit
 
 
+@dataclass
 class ArticleSplit(LegalUnitSplit):
 
     def __init__(self, art_split: TextSplit):
@@ -30,4 +32,4 @@ class ArticleSplit(LegalUnitSplit):
 
     @classmethod
     def _can_erase_number_pattern(cls):
-        return r'Art\.\s*(\d*\w*(?:–\d*\w*)?).\s*'
+        return r'Art[\.]*\s*(\d+[⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᶢʰⁱʲᵏˡᵐⁿᵒᵖʳᑫˢᵗᵘᵛʷˣʸᶻᵘⁿᵒʳᵐᴬᴮᶜᴰᴱᶠᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᵠᴿˢᵀᵁⱽᵂˣʸᶻᴸa-zA-Z]*)\s*(?:[–-]\s*(?:Art\.\s*)?\d+[⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᶢʰⁱʲᵏˡᵐⁿᵒᵖʳᑫˢᵗᵘᵛʷˣʸᶻᵘⁿᵒʳᵐᴬᴮᶜᴰᴱᶠᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᵠᴿˢᵀᵁⱽᵂˣʸᶻᴸa-zA-Z]*)?\.\s*[⁰¹²³⁴⁵⁶⁷⁸⁹⁾]*\s*'

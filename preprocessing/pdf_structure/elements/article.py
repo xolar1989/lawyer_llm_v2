@@ -1,7 +1,7 @@
 from typing import List, Mapping, Any
 
 from preprocessing.pdf_structure.elements.legal_unit import LegalUnit
-from preprocessing.pdf_structure.elements.metadata import LegalPartInfo, ArticleMetadata, ChapterInfo
+from preprocessing.pdf_structure.elements.metadata import LegalPartInfo, ArticleMetadata, ChapterInfo, TitlePartInfo
 from preprocessing.pdf_structure.elements.section import Section
 from preprocessing.pdf_structure.elements.subpoint import Subpoint
 from preprocessing.pdf_structure.splits.article_split import ArticleSplit
@@ -9,6 +9,7 @@ from preprocessing.pdf_structure.splits.chapter_split import ChapterSplit
 from preprocessing.pdf_structure.splits.part_legal_unit_split import PartLegalUnitSplit
 from preprocessing.pdf_structure.splits.point_split import PointSplit
 from preprocessing.pdf_structure.splits.section_split import SectionSplit
+from preprocessing.pdf_structure.splits.title_unit_split import TitleUnitSplit
 from preprocessing.utils.stages_objects import GeneralInfo
 
 
@@ -20,8 +21,13 @@ class Article(LegalUnit):
         self.legal_units_indeed = legal_units_indeed
 
     @classmethod
-    def build(cls, article_split: ArticleSplit, part_unit_split: PartLegalUnitSplit,
+    def build(cls, article_split: ArticleSplit, title_unit_split: TitleUnitSplit, part_unit_split: PartLegalUnitSplit,
               chapter_split: ChapterSplit, general_info: GeneralInfo, invoke_id: str):
+        title_unit_info = None if title_unit_split.is_hidden else TitlePartInfo(
+            title_number=title_unit_split.id_unit,
+            title=title_unit_split.title
+        )
+
         legal_part_info = None if part_unit_split.is_hidden else LegalPartInfo(
             part_number=part_unit_split.id_unit,
             title=part_unit_split.title
@@ -37,6 +43,7 @@ class Article(LegalUnit):
             ELI=general_info.ELI,
             legal_act_name=general_info.title,
             invoke_id=invoke_id,
+            title_part_info=title_unit_info,
             legal_part_info=legal_part_info,
             chapter_info=chapter_info
         )
@@ -46,10 +53,12 @@ class Article(LegalUnit):
                 continue
             if isinstance(legal_unit_split, SectionSplit):
                 section = Section.build(legal_unit_split, article_split.id_unit)
-                legal_units_indeed.append(section)
+                if section.is_up_to_date():
+                    legal_units_indeed.append(section)
             elif isinstance(legal_unit_split, PointSplit):
                 subpoint = Subpoint.build(legal_unit_split)
-                legal_units_indeed.append(subpoint)
+                if subpoint.is_up_to_date():
+                    legal_units_indeed.append(subpoint)
         sections = [legal_unit for legal_unit in legal_units_indeed if isinstance(legal_unit, Section)]
         subpoints = [legal_unit for legal_unit in legal_units_indeed if isinstance(legal_unit, Subpoint)]
         if not cls.is_ascending(sections):

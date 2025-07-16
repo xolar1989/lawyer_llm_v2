@@ -4,10 +4,10 @@ from typing import List
 from preprocessing.pdf_structure.splits.article_split import ArticleSplit
 from preprocessing.pdf_structure.splits.point_split import PointSplit
 from preprocessing.pdf_structure.splits.section_split import SectionSplit
-from preprocessing.pdf_structure.splitters.abstract_document_splitter import AbstractDocumentSplitter, SplitMatch
+from preprocessing.pdf_structure.splitters.abstract_document_splitter import AbstractDocumentSplitter
 
 
-class PointSplitter(AbstractDocumentSplitter):
+class PointSplitter(AbstractDocumentSplitter[PointSplit]):
 
     def __init__(self):
         super().__init__()
@@ -18,28 +18,12 @@ class PointSplitter(AbstractDocumentSplitter):
     def upcoming_change_pattern(self):
         return r"<\s*\d+[a-zA-Z]?\)[^<>\[\]]*>"
 
-    def split_function(self, text) -> List[SplitMatch]:
-        first_pattern = re.compile(
-            r"(?<![-–])(?<!pkt\s)(?<!poz\.\s)(?<!ust\.\s)(?<!art\.\s)^1[a-z]{0,2}\)\s[\s\S]*?(?=(?<![-–])(?<!pkt\s)(?<!ust\.\s)(?<!art\.\s)\d{1,2}[a-z]?\)\s|\Z)",
-            re.MULTILINE
-        )
-
-        matches = []
-        first_match = first_pattern.search(text)
-        if not first_match:
-            return matches
-
-        rest_text = text[first_match.start():]
-        after_offset_results = re.finditer(
-            r'(?<![-–])(?<!pkt\s)(?<!poz\.\s)(?<!ust\.\s)(?<!art\.\s)^(\d+[a-z]?\)\s[\s\S]*?)(?=(?<![-–])(?<!pkt\s)(?<!ust\.\s)(?<!art\.\s)\d+[a-z]?\)\s|\Z)',
-            rest_text,
+    def split_function(self, text):
+        return re.finditer(
+            r'(?<![-–])(?<!\ss\.\s)(?<!\ss\.\s\s)(?<!\si\s)(?<!\si\s\s)(?<!\si\s\s\s)(?<!str\.\s)(?<!str\.\s\s)(?<!str\.\s\s\s)(?<!pkt\s)(?<!pkt\s\s)(?<!pkt\s\s\s)(?<!ust\.\s)(?<!ust\.\s\s)(?<!ust\.\s\s\s)(?<!art\.\s)(?<!art\.\s\s)(?<!art\.\s\s\s)(?<!poz\.\s)(?<!poz\.\s\s)(?<!poz\.\s\s\s)^((?:[\<§\[]*\s*)?\d+[a-zA-Z]*\)\s*[\s\S]*?)(?=(?<![-–])(?<!\ss\.\s)(?<!\ss\.\s\s)(?<!\si\s)(?<!\si\s\s)(?<!\si\s\s\s)(?<!str\.\s)(?<!str\.\s\s)(?<!str\.\s\s\s)(?<!pkt\s)(?<!pkt\s\s)(?<!pkt\s\s\s)(?<!ust\.\s)(?<!ust\.\s\s)(?<!ust\.\s\s\s)(?<!art\.\s)(?<!art\.\s\s)(?<!art\.\s\s\s)(?<!poz\.\s)(?<!poz\.\s\s)(?<!poz\.\s\s\s)^((?:[\<§\[]*\s*)?\d+[a-zA-Z]*\)\s*)(?!,)|\Z)',
+            text,
             flags=re.DOTALL | re.MULTILINE
         )
-        for match in after_offset_results:
-            start_index = first_match.start() + match.start()
-            end_index = first_match.start() + match.end()
-            matches.append(SplitMatch(start_index, end_index, match.group()))
-        return matches
 
     def split(self, art_split: ArticleSplit):
 
@@ -67,7 +51,7 @@ class PointSplitter(AbstractDocumentSplitter):
             if len(art_split.legal_units_indeed) > 0 and len(subpoint_of_art) > 0:
                 raise RuntimeError(f"It should be like that in Art: {art_split.id_unit}, "
                                    f"sections numbers: {[section.id_unit for section in art_split.legal_units_indeed]}"
-                                   f"subpoints numbers: {[subpoint for subpoint in subpoint_of_art]}")
+                                   f"subpoints numbers: {[subpoint.id_unit for subpoint in subpoint_of_art]}")
             art_split.legal_units_indeed.extend(subpoint_of_art)
 
         for section_split in art_split.legal_units_indeed:
@@ -93,3 +77,6 @@ class PointSplitter(AbstractDocumentSplitter):
                         subpoint_splits_for_each_section.append(PointSplit(subpoint_split))
                 section_split.set_legal_indeed_units(subpoint_splits_for_each_section)
         return art_split
+
+    def filter_splits(self, splits: List[PointSplit]) -> List[PointSplit]:
+        pass

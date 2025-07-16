@@ -2,6 +2,7 @@ import gc
 import traceback
 from typing import List, Dict
 
+import unicodedata
 from tqdm import tqdm
 
 from preprocessing.dask.fargate_dask_cluster import retry_dask_task
@@ -14,12 +15,15 @@ from preprocessing.pdf_elements.lines import TextLinePageLegalAct, TableRegionPa
 from preprocessing.pdf_structure.elements.article import Article
 from preprocessing.pdf_structure.splits.part_legal_unit_split import PartLegalUnitSplit
 from preprocessing.pdf_structure.splits.text_split import TextSplit, CharTextSplit, StatusOfText
+from preprocessing.pdf_structure.splits.title_unit_split import TitleUnitSplit
 from preprocessing.pdf_structure.splitters.article_splitter import ArticleSplitter
 from preprocessing.pdf_structure.splitters.chapter_splitter import ChapterSplitter
 from preprocessing.pdf_structure.splitters.inside_split_text_splitter import InsideSplitTextSplitter
 from preprocessing.pdf_structure.splitters.part_legal_unit_splitter import PartLegalUnitSplitter
 from preprocessing.pdf_structure.splitters.point_splitter import PointSplitter
 from preprocessing.pdf_structure.splitters.section_splitter import SectionSplitter
+from preprocessing.pdf_structure.splitters.statute_body_splitter import StatuteBodySplitter
+from preprocessing.pdf_structure.splitters.title_unit_splitter import TitleUnitSplitter
 from preprocessing.utils.defaults import DAG_TABLE_ID
 from preprocessing.utils.general import timeit
 from preprocessing.utils.stage_def import FlowStep
@@ -33,6 +37,8 @@ from preprocessing.utils.stages_objects import GeneralInfo
 
 
 class StructureLegalActs(FlowStep):
+    statute_body_splitter = StatuteBodySplitter()
+    title_unit_splitter = TitleUnitSplitter()
     part_legal_unit_splitter = PartLegalUnitSplitter()
     chapter_splitter = ChapterSplitter()
     article_splitter = ArticleSplitter()
@@ -86,44 +92,61 @@ class StructureLegalActs(FlowStep):
 
     @classmethod
     @timeit
-    def split_legal_act(cls, pages: List[LegalActPage]) -> List[PartLegalUnitSplit]:
+    def split_legal_act(cls, pages: List[LegalActPage]) -> List[TitleUnitSplit]:
         document_chars = cls.get_chars_of_paragraph(pages)
 
         document_text_split = TextSplit(
             list(map(lambda char: CharTextSplit(char, StatusOfText.NOT_MATCH_CHANGE), document_chars)),
             StatusOfText.NOT_MATCH_CHANGE
         )
-        part_legal_unit_divisions = cls.part_legal_unit_splitter.split(document_text_split)
-        for part_division in part_legal_unit_divisions:
-            chapters = cls.chapter_splitter.split(part_division)
-            for chapter in chapters:
-                chapter_articles = cls.article_splitter.split(chapter)
-                for article in chapter_articles:
-                    article = cls.section_splitter.split(article)
-                    article = cls.subpoint_splitter.split(article)
-                    article = cls.inside_split_text_splitter.split(article)
+        statute_body_split = cls.statute_body_splitter.split(document_text_split)
+        title_units_splits = cls.title_unit_splitter.split(statute_body_split)
 
-        return part_legal_unit_divisions
+        for title_unit_split in title_units_splits:
+            part_legal_unit_divisions = cls.part_legal_unit_splitter.split(title_unit_split)
+            for part_division in part_legal_unit_divisions:
+                chapters = cls.chapter_splitter.split(part_division)
+                for chapter in chapters:
+                    chapter_articles = cls.article_splitter.split(chapter)
+                    for article in chapter_articles:
+                        article = cls.section_splitter.split(article)
+                        article = cls.subpoint_splitter.split(article)
+                        article = cls.inside_split_text_splitter.split(article)
+
+        return title_units_splits
 
     @classmethod
     @timeit
-    def build_articles_of_document(cls, part_legal_splits: List[PartLegalUnitSplit], general_info: GeneralInfo, invoke_id:str):
+    def build_articles_of_document(cls, title_units_splits: List[TitleUnitSplit], general_info: GeneralInfo, invoke_id:str):
         articles = []
-        for part_legal_split in part_legal_splits:
-            for chapter_split in part_legal_split.chapters:
-                for article_split in chapter_split.articles:
-                    if article_split.is_current_unit:
-                        article = Article.build(
-                            article_split=article_split,
-                            part_unit_split=part_legal_split,
-                            chapter_split=chapter_split,
-                            general_info=general_info,
-                            invoke_id=invoke_id
-                        )
-                        articles.append(article)
+        for title_unit_split in title_units_splits:
+            for part_legal_split in title_unit_split.part_unit_splits:
+                for chapter_split in part_legal_split.chapters:
+                    for article_split in chapter_split.articles:
+                        if article_split.is_current_unit:
+                            article = Article.build(
+                                article_split=article_split,
+                                title_unit_split=title_unit_split,
+                                part_unit_split=part_legal_split,
+                                chapter_split=chapter_split,
+                                general_info=general_info,
+                                invoke_id=invoke_id
+                            )
+                            if article.is_up_to_date():
+                                articles.append(article)
         if not Article.is_ascending(articles):
             raise RuntimeError(f"The ids of articles are not in ascending order {[item.unit_id for item in articles]}")
         return articles
+
+    ## TODO it should be done in filtering steps, in future move it
+    @classmethod
+    def is_row_of_transitional_provisions(cls,general_info: GeneralInfo):
+        def normalize(text: str) -> str:
+            # Usuwa znaki diakrytyczne, np. ą → a, ć → c
+            text = unicodedata.normalize('NFKD', text)
+            return ''.join(c for c in text if not unicodedata.combining(c)).lower()
+        normalized_text = normalize(general_info.title)
+        return 'przepisy wprowadzajace' in normalized_text
 
     @classmethod
     @retry_dask_task(retries=3, delay=10)
@@ -140,8 +163,15 @@ class StructureLegalActs(FlowStep):
                 },
                 {"_id": 0}
             )
-            pages_of_document = list(map(lambda doc: LegalActPageMetadata.from_dict(doc).page, rows))
             general_info_document = next(map(lambda doc: LegalActPageMetadata.from_dict(doc), rows)).general_info
+            if cls.is_row_of_transitional_provisions(general_info_document):
+                ## TODO it shouldn't be done here it should be done in filtering method
+                return {
+                    'ELI': row['ELI'],
+                    'invoke_id': row[DAG_TABLE_ID],
+                    'status': 'success'
+                }
+            pages_of_document = list(map(lambda doc: LegalActPageMetadata.from_dict(doc).page, rows))
             invoke_id = next(map(lambda doc: LegalActPageMetadata.from_dict(doc), rows)).invoke_id
             s3_pdf_path = general_info_document.s3_pdf_path
 
@@ -158,6 +188,8 @@ class StructureLegalActs(FlowStep):
             # bucket, key = extract_bucket_and_key(s3_pdf_path)
             # pdf_content = io.BytesIO(
             #     boto3.client('s3', region_name=AWS_REGION).get_object(Bucket=bucket, Key=key)['Body'].read())
+
+            ## TODO it should be done, „  text" should be grouped as <> or [], however now i don't have time for it
             try:
                 part_legal_unit_divisions = cls.split_legal_act(pages_of_document)
                 articles: List[Article] = cls.build_articles_of_document(part_legal_unit_divisions, general_info_document, invoke_id)
@@ -177,7 +209,8 @@ class StructureLegalActs(FlowStep):
                             "ELI": row['ELI'],
                             "invoke_id": row[DAG_TABLE_ID],
                             "error_msg": str(e),
-                            "traceback": format_error
+                            "traceback": format_error,
+                            "type": "during_structuring"
                         }
                     },
                     upsert=True
@@ -190,10 +223,37 @@ class StructureLegalActs(FlowStep):
 
 
             articles_to_save = [article.to_dict() for article in articles]
-            get_mongodb_collection(
-                db_name="datasets",
-                collection_name="legal_acts_articles"
-            ).insert_many(articles_to_save)
+            try:
+                get_mongodb_collection(
+                    db_name="datasets",
+                    collection_name="legal_acts_articles"
+                ).insert_many(articles_to_save)
+            except Exception as e:
+                format_error = traceback.format_exc()
+                get_mongodb_collection(
+                    db_name="preprocessing_legal_acts_texts",
+                    collection_name="document_splitting_error"
+                ).update_one(
+                    {
+                        "ELI": row['ELI'],
+                        "invoke_id": row[DAG_TABLE_ID]
+                    },
+                    {
+                        "$set":{
+                            "ELI": row['ELI'],
+                            "invoke_id": row[DAG_TABLE_ID],
+                            "error_msg": str(e),
+                            "traceback": format_error,
+                            "type": "during_inserting"
+                        }
+                    },
+                    upsert=True
+                )
+                return {
+                    'ELI': row['ELI'],
+                    'invoke_id': row[DAG_TABLE_ID],
+                    'status': 'failed'
+                }
 
         finally:
             gc.collect()
@@ -222,19 +282,40 @@ class StructureLegalActs(FlowStep):
         # selected_ddf = ddf_eli_documents[
         #     ddf_eli_documents["ELI"] == "DU/2009/1240"].compute()
         # selected_ddf = ddf_eli_documents[
-        #     ddf_eli_documents["ELI"] == "DU/1984/268"].compute()
+        #     ddf_eli_documents["ELI"] == "DU/2023/1407"].compute()
         # selected_ddf = ddf_eli_documents[
-        #     ddf_eli_documents["ELI"] == "DU/2022/974"].compute()
+        #     ddf_eli_documents["ELI"] == "DU/2001/27"].compute()
+        # selected_ddf = ddf_eli_documents[
+        #     ddf_eli_documents["ELI"] == "DU/1966/151"].compute()
+        # selected_ddf = ddf_eli_documents[
+        #     ddf_eli_documents["ELI"] == "DU/2008/1569"].compute()
+        # selected_ddf = ddf_eli_documents[
+        #     ddf_eli_documents["ELI"] == "DU/2006/1700"].compute()
+        # selected_ddf = ddf_eli_documents[
+        #     ddf_eli_documents["ELI"] == "DU/1994/83"].compute()
+        # selected_ddf = ddf_eli_documents[
+        #     ddf_eli_documents["ELI"] == "DU/1982/80"].compute()
+        # selected_ddf = ddf_eli_documents[
+        #     ddf_eli_documents["ELI"] == "DU/2004/1206"].compute()
+        # selected_ddf = ddf_eli_documents[
+        #     ddf_eli_documents["ELI"] == "DU/2019/1818"].compute()
 
         # selected_ddf = ddf_eli_documents[
-        #     ddf_eli_documents["ELI"] == "DU/1960/168"].compute()
+        #     ddf_eli_documents["ELI"] == "DU/1997/348"].compute()
+        # r = cls.worker_task(row=selected_ddf.iloc[0].to_dict())
         #
         # selected_ddf = ddf_eli_documents[
-        #     ddf_eli_documents["ELI"] == "DU/1985/60"].compute()
+        #     ddf_eli_documents["ELI"] == "DU/1991/350"].compute()
+        # r = cls.worker_task(row=selected_ddf.iloc[0].to_dict())
+
+        # selected_ddf = ddf_eli_documents[
+        #     ddf_eli_documents["ELI"] == "DU/1998/930"].compute()
         # selected_ddf = ddf_eli_documents[
         #     ddf_eli_documents["ELI"] == "DU/1974/117"].compute()
         # r = cls.worker_task(row=selected_ddf.iloc[0].to_dict())
-
+        ## TODO https://api.sejm.gov.pl/eli/acts/DU/2015/478/text/U/D20150478Lj.pdf
+        ## TODO D20150021Lj.pdf,  DU/2025/39,  I have some ideas how handle it however for now we gonna skip it
+        ## TODO https://api.sejm.gov.pl/eli/acts/DU/1966/151/text/U/D19660151Lj.pdf should be oddział divided
         delayed_tasks = ddf_eli_documents.map_partitions(
             lambda df: [
                 delayed(cls.worker_task)(

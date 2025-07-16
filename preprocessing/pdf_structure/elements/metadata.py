@@ -3,6 +3,13 @@ from typing import Mapping, Any
 from preprocessing.mongo_db.mongodb import MongodbObject
 
 
+class TitlePartInfo:
+
+    def __init__(self, title_number: str, title: str):
+        self.title_number = title_number
+        self.title = title
+
+
 class LegalPartInfo:
 
     def __init__(self, part_number: str, title: str):
@@ -20,10 +27,12 @@ class ChapterInfo:
 class ArticleMetadata(MongodbObject):
 
     def __init__(self, ELI: str, legal_act_name: str, invoke_id: str,
+                 title_part_info: TitlePartInfo,
                  legal_part_info: LegalPartInfo, chapter_info: ChapterInfo):
         self.ELI = ELI
         self.legal_act_name = legal_act_name
         self.invoke_id = invoke_id
+        self.title_part_info = title_part_info
         self.legal_part_info = legal_part_info
         self.chapter_info = chapter_info
 
@@ -32,6 +41,7 @@ class ArticleMetadata(MongodbObject):
             'ELI': self.ELI,
             'legal_act_name': self.legal_act_name,
             'invoke_id': self.invoke_id,
+            'title_part_info': self.title_part_info.__dict__ if self.title_part_info else None,
             'legal_part_info': self.legal_part_info.__dict__ if self.legal_part_info else None,
             'chapter_info': self.chapter_info.__dict__ if self.chapter_info else None
         }
@@ -42,6 +52,7 @@ class ArticleMetadata(MongodbObject):
             ELI=dict_object['ELI'],
             legal_act_name=dict_object['legal_act_name'],
             invoke_id=dict_object['invoke_id'],
+            title_part_info=TitlePartInfo(**dict_object['title_part_info']) if dict_object['title_part_info'] is not None else None,
             legal_part_info=LegalPartInfo(**dict_object['legal_part_info']) if dict_object['legal_part_info'] is not None else None,
             chapter_info=ChapterInfo(**dict_object['chapter_info']) if dict_object['chapter_info'] is not None else None
         )

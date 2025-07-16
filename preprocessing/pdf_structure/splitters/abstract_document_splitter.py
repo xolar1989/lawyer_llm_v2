@@ -1,28 +1,16 @@
 import re
 from abc import abstractmethod, ABC
-from typing import List
+from typing import List,  TypeVar, Generic
+
+import unicodedata
 
 from preprocessing.pdf_structure.splits.text_split import StatusOfText, TextSplit
 
 
-class SplitMatch:
-
-    def __init__(self, start: int, end: int, group: str):
-        self._start = start
-        self._end = end
-        self._group = group
-
-    def start(self):
-        return self._start
-
-    def end(self):
-        return self._end
-
-    def group(self):
-        return self._group
+T = TypeVar('T')
 
 
-class AbstractDocumentSplitter(ABC):
+class AbstractDocumentSplitter(ABC, Generic[T]):
     BEFORE_UPCOMING_CHANGE_PATTERN = r'^\[([^\[\]]*?)\]$'
     UPCOMING_CHANGE_PATTERN = r'^<([^\[\]]*?)>$'
 
@@ -38,12 +26,22 @@ class AbstractDocumentSplitter(ABC):
         pass  # [....]
 
     @abstractmethod
-    def split_function(self, text) -> List[SplitMatch]:
+    def split_function(self, **kwargs):
         pass
 
     @abstractmethod
     def split(self, **kwargs):
         pass
+
+    @abstractmethod
+    def filter_splits(self, splits: List[T]) -> List[T]:
+        pass
+
+    @staticmethod
+    def normalize(text: str) -> str:
+        # Usuwa znaki diakrytyczne, np. ą → a, ć → c
+        text = unicodedata.normalize('NFKD', text)
+        return ''.join(c for c in text if not unicodedata.combining(c)).lower()
 
     def get_pattern_for_text_with_brackets(self, action_type: StatusOfText):
         return self.BEFORE_UPCOMING_CHANGE_PATTERN if action_type == StatusOfText.BEFORE_UPCOMING_CHANGE else self.UPCOMING_CHANGE_PATTERN

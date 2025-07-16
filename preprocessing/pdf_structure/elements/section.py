@@ -19,9 +19,9 @@ class Section(LegalUnit):
         for subpoint_split in section_split.legal_units_indeed:
             if not subpoint_split.is_current_unit:
                 continue
-            subpoint_list.append(
-                Subpoint.build(subpoint_split)
-            )
+            subpoint = Subpoint.build(subpoint_split)
+            if subpoint.is_up_to_date():
+                subpoint_list.append(subpoint)
         if not cls.is_ascending(subpoint_list):
             raise RuntimeError(f"The ids of subpoints are not in ascending order {[item.unit_id for item in subpoint_list]},"
                                f"Article id: {art_id}"

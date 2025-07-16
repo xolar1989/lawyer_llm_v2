@@ -1,10 +1,15 @@
+from typing import List
+
 from preprocessing.pdf_structure.splits.article_split import ArticleSplit
 from preprocessing.pdf_structure.splits.section_split import SectionSplit
 from preprocessing.pdf_structure.splits.text_split import TextSplit, StatusOfText
-from preprocessing.pdf_structure.splitters.abstract_document_splitter import AbstractDocumentSplitter
+from preprocessing.pdf_structure.splitters.abstract_document_splitter import AbstractDocumentSplitter, T
 
 
-class InsideSplitTextSplitter(AbstractDocumentSplitter):
+class InsideSplitTextSplitter(AbstractDocumentSplitter[ArticleSplit]):
+
+    def filter_splits(self, splits: List[ArticleSplit]) -> List[ArticleSplit]:
+        pass
 
     def before_upcoming_change_pattern(self):
         return r'\[([^\[\]]*?)\]'
@@ -36,9 +41,12 @@ class InsideSplitTextSplitter(AbstractDocumentSplitter):
         if art_split_without_indeed_items:
             self.update_split_by_upcoming_changes(art_split_without_indeed_items)
         for indeed_split in art_split.legal_units_indeed:
+
             indeed_split_without_indeed_items = indeed_split.split_item_for_further_processing()
+
             if indeed_split_without_indeed_items:
                 self.update_split_by_upcoming_changes(indeed_split_without_indeed_items)
+
             if isinstance(indeed_split, SectionSplit):
                 for subpoint_split in indeed_split.legal_units_indeed:
                     self.update_split_by_upcoming_changes(subpoint_split.split_item_for_further_processing())

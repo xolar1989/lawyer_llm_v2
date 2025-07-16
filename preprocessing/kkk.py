@@ -1049,28 +1049,28 @@ def preprocessing_api():
     WORKERS_SERVICE = "Dask-Workers"
     #
     #
-    # dask_cluster = CreateLocalDaskCluster.run(
-    #     num_workers=6
-    # )
+    dask_cluster = CreateLocalDaskCluster.run(
+        num_workers=5
+    )
     R = 4
     ## TODO when we start flow define if stack name already exist, omit creation of stack
-    dask_cluster = CreateRemoteDaskCluster.run(
-        stack_name=STACK_NAME,
-        cluster_name=CLUSTER_NAME,
-        workers_service_name=WORKERS_SERVICE,
-        flow_run_id=flow_run.id,
-        flow_run_name=flow_run.name,
-        cluster_props={
-            "EnableScaling": "false",
-            "MemoryCapacity": "8192",
-            "CpuCapacity": '4096'
-        }
-    )
-
-    dask_cluster = UpdateDaskClusterWorkers.run(
-        dask_cluster=dask_cluster,
-        desired_count=20
-    )
+    # dask_cluster = CreateRemoteDaskCluster.run(
+    #     stack_name=STACK_NAME,
+    #     cluster_name=CLUSTER_NAME,
+    #     workers_service_name=WORKERS_SERVICE,
+    #     flow_run_id=flow_run.id,
+    #     flow_run_name=flow_run.name,
+    #     cluster_props={
+    #         "EnableScaling": "false",
+    #         "MemoryCapacity": "8192",
+    #         "CpuCapacity": '4096'
+    #     }
+    # )
+    #
+    # dask_cluster = UpdateDaskClusterWorkers.run(
+    #     dask_cluster=dask_cluster,
+    #     desired_count=20
+    # )
 
     datalake = Datalake(datalake_bucket=DATALAKE_BUCKET, aws_region=AWS_REGION)
 
@@ -1176,9 +1176,19 @@ def preprocessing_api():
     path_to_parquet_line_divisions_success_rerun = 's3://datalake-bucket-123/stages/$f8df0cb0-5f33-450a-9836-61973cdcb7e7/LegalActLineDivision/successful_results.parquet.gzip'
     path_to_parquet_line_divisions_failed_rerun = 's3://datalake-bucket-123/stages/$f8df0cb0-5f33-450a-9836-61973cdcb7e7/LegalActLineDivision/failed_results.parquet.gzip'
 
-    path_to_parquet_legal_parts_success_first_run, path_to_parquet_legal_parts_failed_first_run = StructureLegalActs.run(
+
+    # path_to_parquet_legal_parts_success_first_run, path_to_parquet_legal_parts_failed_first_run = StructureLegalActs.run(
+    #     flow_information=flow_information, dask_client=client, workers_count=dask_cluster.get_workers_count(),
+    #     s3_path_parquet_with_eli_documents=path_to_parquet_line_divisions_success
+    #     # s3_path_parquet_with_eli_documents=path_to_parquet_line_divisions_success_rerun
+    # )
+
+    path_to_parquet_legal_parts_success_first_run = 's3://datalake-bucket-123/stages/$b5da4ef7-d69f-45bb-a003-34a42264eb37/StructureLegalActs/successful_results.parquet.gzip'
+
+    path_to_parquet_legal_parts_success_first_run_v2, path_to_parquet_legal_parts_failed_first_run_v2 = StructureLegalActs.run(
         flow_information=flow_information, dask_client=client, workers_count=dask_cluster.get_workers_count(),
-        s3_path_parquet_with_eli_documents=path_to_parquet_line_divisions_success
+        # s3_path_parquet_with_eli_documents=path_to_parquet_line_divisions_success
+        s3_path_parquet_with_eli_documents=path_to_parquet_line_divisions_failed_rerun
     )
 
     s = 4
@@ -1373,13 +1383,14 @@ def for_the_running_without_debugging(local_cluster: bool = True):
                                                                                workers_count=dask_workers_count,
                                                                                s3_path_parquet_with_legal_document_rows=path_to_parquet_for_legal_documents_with_s3_pdf)
 
-    ## STEP 7  heavy cost, there are some rows which fail
+    ## STEP 7  heavy cost, there are some rows which fails, however after rerun all success, there is a memory issue with cropping image, dask worker doesn't release memory
     path_to_parquet_line_divisions_success, path_to_parquet_line_divisions_failed = LegalActLineDivision.run(flow_information=flow_information, dask_client=client,
                                                               workers_count=dask_workers_count,
                                                               s3_path_parquet_with_eli_documents=path_to_parquet_pages_boundaries)
 
-    ## TODO  i am gonna update regexes in new commits
-    ## STEP 8  1/4 of rows now fail due to regex minor issues
+
+    ## STEP 8
+    # TODO 43 out of 866 fails due to minor issues which such as „...“ which we don't handle it require extra logic if i had had more time for it I would have done
     path_to_parquet_legal_parts_success_first_run, path_to_parquet_legal_parts_failed_first_run = StructureLegalActs.run(
         flow_information=flow_information, dask_client=client, workers_count=dask_cluster.get_workers_count(),
         s3_path_parquet_with_eli_documents=path_to_parquet_line_divisions_success
@@ -1401,11 +1412,11 @@ if __name__ == "__main__":
     except Exception:
         log.error("Remote error:\n%s", traceback.format_exc())
 
-    try:
-        preprocessing_api()
-    except Exception:
-        log.error("Remote error:\n%s", traceback.format_exc())
-        raise  # ważne! żeby Prefect widział błąd
+    # try:
+    #     preprocessing_api()
+    # except Exception:
+    #     log.error("Remote error:\n%s", traceback.format_exc())
+    #     raise  # ważne! żeby Prefect widział błąd
     cluster_name = 'Fargate-Dask-Cluster'  # Replace with your ECS cluster name
     service_name = 'Dask-Workers'  # Replace with your ECS service name
     # ecs_client = boto3.client('ecs', region_name='eu-west-1')
@@ -1413,13 +1424,13 @@ if __name__ == "__main__":
     # running_count = response['services'][0]['runningCount']
     # print(f"Currently running tasks: {running_count}")
 
-    download_legal_documents_and_preprocess_them()
-
-    client = Client('tcp://localhost:8786')
+    # download_legal_documents_and_preprocess_them()
+    #
+    # client = Client('tcp://localhost:8786')
     # client = DaskTaskRunner(address='tcp://localhost:8786')
     # kk.task_runner = client
-    kk(client=client)
-    log_repo_info()
+    # kk(client=client)
+    # log_repo_info()
 
     # log_repo_info()
     # my_flow()

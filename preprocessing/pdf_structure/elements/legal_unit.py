@@ -1,3 +1,5 @@
+import random
+import re
 from abc import ABC
 from typing import List, Mapping, Any
 
@@ -14,12 +16,23 @@ class LegalUnit(MongodbObject, ABC):
         self.unit_id = unit_id
         self.text = text
 
+    def is_up_to_date(self):
+        normalized_text = re.sub(r'[\s\n\r]+', '', self.text).strip()
+        normalized_text = re.sub(r'[⁰¹²³⁴⁵⁶⁷⁸⁹]+\⁾\⁽?', '', normalized_text).strip()
+        return normalized_text not in ["(uchylony)", "(uchylona)", "(uchylone)", "(pominięte)", "(pominięty)", '(utraciłmoc)']
+
     @staticmethod
     def is_ascending(legal_units_splits: List['LegalUnit']):
-        # Extract parts for sorting
-        ids_of_splits = [legal_unit_split.unit_id for legal_unit_split in legal_units_splits]
-        # Check if the list is sorted
-        return ids_of_splits == natsorted(ids_of_splits)
+        ids = [unit.unit_id for unit in legal_units_splits]
+
+        def extract_main_number(unit_id: str):
+            match = re.match(r'^(\d+)', unit_id)
+            return int(match.group(1)) if match else float('inf')
+
+        # Build list of main numbers, preserving order
+        main_numbers_in_order = [extract_main_number(id_) for id_ in ids]
+
+        return main_numbers_in_order == sorted(main_numbers_in_order.copy())
 
     @classmethod
     def get_current_text(cls, text_split: TextSplit):

@@ -16,7 +16,7 @@ class ChapterSplitter(AbstractDocumentSplitter):
 
     def split_function(self, text):
         return re.finditer(
-            r'R\s*o\s*z\s*d\s*z\s*i\s*a\s*[łl]\s+[1-9a-zA-Z]+[\s\S]*?(?=R\s*o\s*z\s*d\s*z\s*i\s*a\s*[łl]\s+[1-9a-zA-Z]+|\Z)',
+            r'(?<!„)R\s*o\s*z\s*d\s*z\s*i\s*a\s*[łl]\s+[1-9a-zA-Z]+[\s\S]*?(?=(?<!„)R\s*o\s*z\s*d\s*z\s*i\s*a\s*[łl]\s+[1-9a-zA-Z]+|\Z)',
             text)
 
     def split(self, part_unit_split: PartLegalUnitSplit):
@@ -36,5 +36,20 @@ class ChapterSplitter(AbstractDocumentSplitter):
         if len(chapter_splits) == 0:
             chapter_split = ChapterSplit(part_unit_split.split, is_hidden=True)
             chapter_splits.append(chapter_split)
-        part_unit_split.chapters = chapter_splits
-        return chapter_splits
+
+        filtered_chapter_splits = self.filter_splits(chapter_splits)
+        part_unit_split.chapters = filtered_chapter_splits
+        return filtered_chapter_splits
+
+    def filter_splits(self, chapters_splits: List[ChapterSplit]) -> List[ChapterSplit]:
+        filtered_splits = []
+        for chapter_split in chapters_splits:
+            chapter_title = chapter_split.title.replace("\n", "")
+            if not ('przepisy zmieniajace' in self.normalize(chapter_title) or
+                    'zmiany w przepisach' in self.normalize(chapter_title) or
+                    'przejsciowe' in self.normalize(chapter_title) or
+                    'koncowe' in self.normalize(chapter_title) or
+                    'dostosowujace' in self.normalize(chapter_title)):
+                filtered_splits.append(chapter_split)
+
+        return filtered_splits

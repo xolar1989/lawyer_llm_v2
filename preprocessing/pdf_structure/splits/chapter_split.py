@@ -1,4 +1,5 @@
 import re
+from dataclasses import dataclass
 from typing import List
 
 from preprocessing.pdf_structure.splits.article_split import ArticleSplit
@@ -6,6 +7,7 @@ from preprocessing.pdf_structure.splits.text_split import TextSplit
 from preprocessing.pdf_structure.splits.unit_split import LegalUnitSplit
 
 
+@dataclass
 class ChapterSplit(LegalUnitSplit):
 
     def __init__(self, split: TextSplit, is_hidden: bool = False):

@@ -67,6 +67,11 @@ class TextSplit(MongodbObject):
     def text(self):
         return "".join(legal_char.char.text for legal_char in self.chars)
 
+    def is_up_to_date(self):
+        normalized_text = re.sub(r'[\s\n\r]+', '', self.text).strip()
+        normalized_text = re.sub(r'[⁰¹²³⁴⁵⁶⁷⁸⁹]+\⁾\⁽?', '', normalized_text).strip()
+        return normalized_text not in ["(uchylony)", "(uchylona)", "(uchylone)", "(pominięte)", "(pominięty)", '(utraciłmoc)']
+
     def build_text_split_from_indexes(self, left_index: int, right_index: int) -> 'TextSplit':
         chars: List[CharTextSplit] = []
         index_of_first_char_in_tab = self.get_char_index(left_index)
@@ -103,7 +108,3 @@ class TextSplit(MongodbObject):
             if split_char.char.index_in_legal_act == index_in_legal_act:
                 return char_index
         raise RuntimeError(f"Index is out of range in text split: {self.text}")
-
-    def is_up_to_date(self):
-        normalized_text = re.sub(r'[\s\n\r]+', '', self.text).strip()
-        return normalized_text not in ["(uchylony)", "(uchylona)", "(pominięte)", "(pominięty)"]

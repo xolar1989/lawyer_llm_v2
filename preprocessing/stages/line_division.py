@@ -191,9 +191,11 @@ class LegalActLineDivision(FlowStep):
                                                        'invoke_id': pd.Series(dtype='str')
                                                    })
                                                    )
+
+        # k = ddf_eli_documents.compute()
         # ## TODO Remove it later
         # selected_ddf = ddf_eli_documents[
-        #     ddf_eli_documents["ELI"] == "DU/2011/696"].compute()
+        #     ddf_eli_documents["ELI"] == "DU/1991/373"].compute()
         # selected_ddf = ddf_eli_documents[
         #     ddf_eli_documents["ELI"] == "DU/2009/1240"].compute()
 

@@ -1,11 +1,12 @@
 import re
+from typing import List
 
 from preprocessing.pdf_structure.splits.article_split import ArticleSplit
 from preprocessing.pdf_structure.splits.chapter_split import ChapterSplit
 from preprocessing.pdf_structure.splitters.abstract_document_splitter import AbstractDocumentSplitter
 
 
-class ArticleSplitter(AbstractDocumentSplitter):
+class ArticleSplitter(AbstractDocumentSplitter[ArticleSplit]):
 
     def __init__(self):
         super().__init__()
@@ -17,8 +18,7 @@ class ArticleSplitter(AbstractDocumentSplitter):
         return r"<\s*Art\.\s*\d+[a-zA-Z]*\.[^>\]\[]*>"  # <Art. 1.>
 
     def split_function(self, text):
-        return re.finditer(r'Art\. \d+[a-zA-Z]?[\s\S]*?(?=Art\. \d+[a-zA-Z]?|\Z)', text)
-        # return re.finditer(r'(Art\. \d+[a-zA-Z]?[\s\S]*?)(?=^Art\. \d+[a-zA-Z]?|\Z)', text)
+        return re.finditer(r'(^Art[\.]*\s*\d+[a-zA-Z]*[\.][\s\S]*?)(?=^Art[\.]*\s*\d+[a-zA-Z]*[\.]|\Z)', text, flags=re.DOTALL | re.MULTILINE)
 
     def split(self, chapter_split: ChapterSplit):
         prev_split = chapter_split.split_item_for_further_processing()
@@ -46,6 +46,20 @@ class ArticleSplitter(AbstractDocumentSplitter):
                     raise RuntimeError(f"It fail due to incompatibility of split indexes art_split: {art_split.text} "
                                        f"prev_split using indexes: {prev_split.build_text_split_from_indexes(start_index_match, end_index_match).text}")
                 art_splits.append(ArticleSplit(art_split))
-        chapter_split.articles = art_splits
-        return art_splits
-    
+
+        filtered_art_splits = self.filter_splits(art_splits)
+        chapter_split.articles = filtered_art_splits
+        return filtered_art_splits
+
+    def filter_splits(self, article_splits: List[ArticleSplit]) -> List[ArticleSplit]:
+        filtered_splits = []
+        for article_split in article_splits:
+            text_split = article_split.split_item_for_further_processing()
+
+            text_of_split = text_split.text.replace("\n", "")
+            if not ('wprowadza się następujące zmiany' in text_of_split):
+                filtered_splits.append(article_split)
+            else:
+                w = 4
+
+        return filtered_splits
