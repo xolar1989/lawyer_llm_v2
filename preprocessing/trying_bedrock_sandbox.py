@@ -20,9 +20,9 @@ def encode_image_to_base64(path):
         return base64.b64encode(img_file.read()).decode("utf-8")
 
 
-image_base64 = encode_image_to_base64('lines_2/mama1.png')
+image_base64 = encode_image_to_base64('lines/mama1.png')
 
-image = Image.open('lines_2/rr.png')
+image = Image.open('lines/rr.png')
 
 region = 'eu-west-1'
 
