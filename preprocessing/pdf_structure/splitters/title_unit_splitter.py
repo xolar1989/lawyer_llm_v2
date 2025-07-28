@@ -31,12 +31,10 @@ class TitleUnitSplitter(AbstractDocumentSplitter):
 
             unit_split = TitleUnitSplit(title_unit_split)
             title_units_splits.append(unit_split)
-
-        if len(title_units_splits) == 0:
-            unit_split = TitleUnitSplit(prev_split, is_hidden=True)
-            title_units_splits.append(unit_split)
-
         filtered_splits = self.filter_splits(title_units_splits)
+        if len(filtered_splits) == 0:
+            unit_split = TitleUnitSplit(prev_split, is_hidden=True)
+            filtered_splits.append(unit_split)
         return filtered_splits
 
     def filter_splits(self, title_unit_splits: List[TitleUnitSplit]) -> List[TitleUnitSplit]:

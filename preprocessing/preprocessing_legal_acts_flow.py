@@ -13,7 +13,6 @@ import pandas as pd
 import dask.dataframe as dd
 from dask import delayed
 from pdfplumber.table import Table
-from pydantic.v1 import BaseModel
 from dask.distributed import Client, as_completed
 
 from prefect import flow
@@ -216,8 +215,8 @@ def preprocessing_api():
 
     path_to_parquet_legal_parts_success_first_run_v2, path_to_parquet_legal_parts_failed_first_run_v2 = StructureLegalActs.run(
         flow_information=flow_information, dask_client=client, workers_count=dask_cluster.get_workers_count(),
-        # s3_path_parquet_with_eli_documents=path_to_parquet_line_divisions_success
-        s3_path_parquet_with_eli_documents=path_to_parquet_line_divisions_failed_rerun
+        s3_path_parquet_with_eli_documents=path_to_parquet_line_divisions_success
+        # s3_path_parquet_with_eli_documents=path_to_parquet_line_divisions_failed_rerun`
     )
 
     s = 4
@@ -438,16 +437,16 @@ def for_the_running_without_debugging(local_cluster: bool = True, cluster_stack_
 if __name__ == "__main__":
     # here we define flow
     # StartDag.run() >> CreateDaskCluster
-    try:
-        ## TODO JUST FOCUS ON THIS
-        for_the_running_without_debugging()
-    except Exception:
-        log.error("Remote error:\n%s", traceback.format_exc())
-
     # try:
-    #     preprocessing_api()
+    #     ## TODO JUST FOCUS ON THIS
+    #     for_the_running_without_debugging()
     # except Exception:
     #     log.error("Remote error:\n%s", traceback.format_exc())
-    #     raise  # ważne! żeby Prefect widział błąd
+
+    try:
+        preprocessing_api()
+    except Exception:
+        log.error("Remote error:\n%s", traceback.format_exc())
+        raise  # ważne! żeby Prefect widział błąd
 
 # %%

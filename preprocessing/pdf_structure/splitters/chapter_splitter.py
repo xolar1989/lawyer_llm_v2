@@ -33,11 +33,10 @@ class ChapterSplitter(AbstractDocumentSplitter):
             )
 
             chapter_splits.append(chapter_split)
-        if len(chapter_splits) == 0:
-            chapter_split = ChapterSplit(part_unit_split.split, is_hidden=True)
-            chapter_splits.append(chapter_split)
-
         filtered_chapter_splits = self.filter_splits(chapter_splits)
+        if len(filtered_chapter_splits) == 0:
+            chapter_split = ChapterSplit(part_unit_split.split, is_hidden=True)
+            filtered_chapter_splits.append(chapter_split)
         part_unit_split.chapters = filtered_chapter_splits
         return filtered_chapter_splits
 
@@ -45,7 +44,8 @@ class ChapterSplitter(AbstractDocumentSplitter):
         filtered_splits = []
         for chapter_split in chapters_splits:
             chapter_title = chapter_split.title.replace("\n", "")
-            if not ('przepisy zmieniajace' in self.normalize(chapter_title) or
+            if not ("Zmiany w przepisach" in chapter_title.strip() or
+                    'przepisy zmieniajace' in self.normalize(chapter_title) or
                     'zmiany w przepisach' in self.normalize(chapter_title) or
                     'przejsciowe' in self.normalize(chapter_title) or
                     'koncowe' in self.normalize(chapter_title) or

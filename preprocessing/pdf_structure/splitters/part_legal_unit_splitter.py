@@ -19,7 +19,7 @@ class PartLegalUnitSplitter(AbstractDocumentSplitter[PartLegalUnitSplit]):
         # return [SplitMatch(match.start(),match.end(), match.group())  for match in re.finditer(r'DZIAŁ\s+[IVXLCDM]+[\s\S]*?(?=DZIAŁ\s+[IVXLCDM]+|\Z)', text)]
 
 
-        return re.finditer(r'DZIAŁ\s+[IVXLCDM]+[\s\S]*?(?=DZIAŁ\s+[IVXLCDM]+|\Z)', text)
+        return re.finditer(r'DZIAŁ\s+(?:[IVXLCDM]+|[A-ZĄĆĘŁŃÓŚŹŻ]+)[\s\S]*?(?=DZIAŁ\s+(?:[IVXLCDM]+|[A-ZĄĆĘŁŃÓŚŹŻ]+)|\Z)', text)
 
     def split(self, title_unit_split: TitleUnitSplit):
         prev_split = title_unit_split.split_item_for_further_processing()
@@ -37,11 +37,10 @@ class PartLegalUnitSplitter(AbstractDocumentSplitter[PartLegalUnitSplit]):
 
             unit_split = PartLegalUnitSplit(part_unit_split)
             part_units_splits.append(unit_split)
-
-        if len(part_units_splits) == 0:
-            unit_split = PartLegalUnitSplit(prev_split, is_hidden=True)
-            part_units_splits.append(unit_split)
         filtered_splits = self.filter_splits(part_units_splits)
+        if len(filtered_splits) == 0:
+            unit_split = PartLegalUnitSplit(prev_split, is_hidden=True)
+            filtered_splits.append(unit_split)
         title_unit_split.part_unit_splits = filtered_splits
         return filtered_splits
 

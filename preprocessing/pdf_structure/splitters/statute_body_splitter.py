@@ -17,7 +17,8 @@ class StatuteBodySplitter(AbstractDocumentSplitter):
         pass
 
     def split_function(self, text):
-        return re.compile(r'(U\s*S\s*T\s*A\s*W\s*A[\s\S]*)', flags=re.DOTALL | re.MULTILINE).search(text)
+        return re.compile(r'((U\s*S\s*T\s*A\s*W\s*A|K\s*O\s*N\s*S\s*T\s*Y\s*T\s*U\s*C\s*J\s*A\s+R\s*Z\s*E\s*C\s*Z\s*Y\s*P\s*O\s*S\s*P\s*O\s*L\s*I\s*T\s*E\s*J\s+P\s*O\s*L\s*S\s*K\s*I\s*E\s*J)[\s\S]*)', flags=re.DOTALL | re.MULTILINE).search(text)
+
 
     def split(self, prev_split: TextSplit):
         statute_body_match = self.split_function(prev_split.text)

@@ -30,7 +30,8 @@ class PartLegalUnitSplit(LegalUnitSplit):
     def title(self):
         if self.is_hidden:
             return ""
-        title_search = re.search(r'(DZIAŁ\s+[IVXLCDMA-Z]+)\s*\s*((?:.+\n)*?)^\s*(?=Rozdział|Art\.)', self.split.text,
+
+        title_search = re.search(r'(DZIAŁ\s+[IVXLCDMA-ZĄĆĘŁŃÓŚŹŻ⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᶢʰⁱʲᵏˡᵐⁿᵒᵖʳᑫˢᵗᵘᵛʷˣʸᶻᵘⁿᵒʳᵐᴬᴮᶜᴰᴱᶠᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᵠᴿˢᵀᵁⱽᵂˣʸᶻᴸ]+)\s*\s*((?:.+\n)*?)^\s*(?=Rozdział|Art\.)', self.split.text,
                                  flags=re.MULTILINE)
 
         if title_search is None:
@@ -44,16 +45,16 @@ class PartLegalUnitSplit(LegalUnitSplit):
 
     @classmethod
     def _can_erase_number_pattern(cls):
-        return r'^DZIAŁ\s+([IVXLCDMA-Z]+)'
+        return r'^DZIAŁ\s+([IVXLCDMA-ZĄĆĘŁŃÓŚŹŻ⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᶢʰⁱʲᵏˡᵐⁿᵒᵖʳᑫˢᵗᵘᵛʷˣʸᶻᵘⁿᵒʳᵐᴬᴮᶜᴰᴱᶠᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᵠᴿˢᵀᵁⱽᵂˣʸᶻᴸ]+)'
 
     def split_item_for_further_processing(self):
         if self.is_hidden:
             return self.split
 
-        outside_search = re.search(r'(DZIAŁ\s+[IVXLCDMA-Z]+)\s*\s*((?:.+\n)*?)^\s*(?=Rozdział|Art\.)', self.split.text,
+        outside_search = re.search(r'(DZIAŁ\s+[IVXLCDMA-ZĄĆĘŁŃÓŚŹŻ⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᶢʰⁱʲᵏˡᵐⁿᵒᵖʳᑫˢᵗᵘᵛʷˣʸᶻᵘⁿᵒʳᵐᴬᴮᶜᴰᴱᶠᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᵠᴿˢᵀᵁⱽᵂˣʸᶻᴸ]+)\s*\s*((?:.+\n)*?)^\s*(?=Rozdział|Art\.)', self.split.text,
                                    flags=re.MULTILINE)
         if outside_search is None:
-            check_it = re.search(r'(DZIAŁ\s+[IVXLCDMA-Z]+)\s*\s*', self.split.text, flags=re.MULTILINE)
+            check_it = re.search(r'(DZIAŁ\s+[IVXLCDMA-ZĄĆĘŁŃÓŚŹŻ⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᶢʰⁱʲᵏˡᵐⁿᵒᵖʳᑫˢᵗᵘᵛʷˣʸᶻᵘⁿᵒʳᵐᴬᴮᶜᴰᴱᶠᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᵠᴿˢᵀᵁⱽᵂˣʸᶻᴸ]+)\s*\s*', self.split.text, flags=re.MULTILINE)
             split_without_following_splits = self.split.build_text_split_from_indexes(self.split.start_index + check_it.end(0), self.split.end_index)
             if not split_without_following_splits.is_up_to_date():
                 return split_without_following_splits

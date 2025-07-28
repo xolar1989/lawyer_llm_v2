@@ -307,15 +307,29 @@ class StructureLegalActs(FlowStep):
         # selected_ddf = ddf_eli_documents[
         #     ddf_eli_documents["ELI"] == "DU/1991/350"].compute()
         # r = cls.worker_task(row=selected_ddf.iloc[0].to_dict())
+        #
+        # pdf = pd.DataFrame(
+        #     {
+        #         "ELI": "DU/1991/350",
+        #         "invoke_id": "72f213ee-7227-4e99-96f0-63a5766ed1d8"
+        #     }
+        # )
+
+        www = cls.worker_task(row={
+            "ELI": "DU/1974/141",
+            "invoke_id": "72f213ee-7227-4e99-96f0-63a5766ed1d8"
+        })
 
         # selected_ddf = ddf_eli_documents[
         #     ddf_eli_documents["ELI"] == "DU/1998/930"].compute()
         # selected_ddf = ddf_eli_documents[
-        #     ddf_eli_documents["ELI"] == "DU/1974/117"].compute()
+        #     ddf_eli_documents["ELI"] == "DU/1991/350"].compute()
         # r = cls.worker_task(row=selected_ddf.iloc[0].to_dict())
         ## TODO https://api.sejm.gov.pl/eli/acts/DU/2015/478/text/U/D20150478Lj.pdf
         ## TODO D20150021Lj.pdf,  DU/2025/39,  I have some ideas how handle it however for now we gonna skip it
         ## TODO https://api.sejm.gov.pl/eli/acts/DU/1966/151/text/U/D19660151Lj.pdf should be oddział divided
+        ## TODO DU/1964/93 add Ksiega split, it capture CZESC where CZESC capture TYTUL
+        ## TODO add oddział which is captured by rozdział
         delayed_tasks = ddf_eli_documents.map_partitions(
             lambda df: [
                 delayed(cls.worker_task)(

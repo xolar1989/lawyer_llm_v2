@@ -12,14 +12,15 @@ class SectionSplitter(AbstractDocumentSplitter[SectionSplit]):
         super().__init__()
 
     def before_upcoming_change_pattern(self):
-        return r"\[\s*(?:§\s*\d+[a-zA-Z]?[\.]?\s*)?[^\<\>\[\]]+?\]"  # [1.] [§ 1.]
+        return r"\[\s*[§]*\s*\d+[a-zA-ZĄĆĘŁŃÓŚŹŻąćęłńóśźż]*\.\s*[^\<\>\[\]]+?\]"  # [1.] [§ 1.]
 
     def upcoming_change_pattern(self):
-        return r"\<\s*(?:§\s*\d+[a-zA-Z]?[\.]?\s*)?[^\<\>\[\]]+?\>"  # <1.> <§ 1.>
+        return r"\<\s*[§]*\s*\d+[a-zA-ZĄĆĘŁŃÓŚŹŻąćęłńóśźż]*\.[^\<\>\[\]]+?\>"  # <1.> <§ 1.>
 
+    ## TODO create the dynamic regex, for this
     def split_function(self, text):
         return re.finditer(
-                r'(?<![-–])(?<!str\.\s)(?<!str\.\s\s)(?<!str\.\s\s\s)(?<!\salbo\s)(?<!\salbo\s\s)(?<!\salbo\s\s\s)(?<!\slub\s)(?<!\slub\s\s)(?<!\si\s)(?<!\si\s\s)(?<!\si\s\s\s)(?<!pkt\s)(?<!pkt\s\s)(?<!pkt\s\s\s)(?<!ust\.\s)(?<!ust\.\s\s)(?<!ust\.\s\s\s)(?<!art\.\s)(?<!art\.\s\s)(?<!art\.\s\s\s)(?<!poz\.\s)(?<!poz\.\s\s)(?<!poz\.\s\s\s)^((?:[\<§\[]*\s*)?\d{1,2}[a-zA-Z⁰¹²³⁴⁵⁶⁷⁸⁹]{0,4}\.\s*(?=[A-ZĄĆĘŁŃÓŚŹŻ⁰¹²³⁴⁵⁶⁷⁸⁹⁾\(])[\s\S]*?)(?=(?<![-–])(?<!\salbo\s)(?<!\salbo\s\s)(?<!\salbo\s\s\s)(?<!str\.\s)(?<!str\.\s\s)(?<!str\.\s\s\s)(?<!\slub\s)(?<!\slub\s\s)(?<!\si\s)(?<!\si\s\s)(?<!\si\s\s\s)(?<!pkt\s)(?<!pkt\s\s)(?<!pkt\s\s\s)(?<!ust\.\s)(?<!ust\.\s\s)(?<!ust\.\s\s\s)(?<!art\.\s)(?<!art\.\s\s)(?<!art\.\s\s\s)(?<!poz\.\s)(?<!poz\.\s\s)(?<!poz\.\s\s\s)^((?:[\<§\[]*\s*)?\d{1,2}[a-zA-Z⁰¹²³⁴⁵⁶⁷⁸⁹]{0,4}\.\s*(?=[A-ZĄĆĘŁŃÓŚŹŻ⁰¹²³⁴⁵⁶⁷⁸⁹⁾\(]))|\Z)',
+                r'(?<![-–])(?<!\sart\.\d\d\d\s)(?<!\sstr\.\s)(?<!\sstr\.\s\s)(?<!\sstr\.\s\s\s)(?<!\salbo\s)(?<!\salbo\s\s)(?<!\salbo\s\s\s)(?<!\slub\s)(?<!\slub\s\s)(?<!\si\s)(?<!\si\s\s)(?<!\si\s\s\s)(?<!\spkt\s)(?<!\spkt\s\s)(?<!\spkt\s\s\s)(?<!\sust\.\s)(?<!\sust\.\s\s)(?<!\sust\.\s\s\s)(?<!\sart\.\s)(?<!\sart\.\s\s)(?<!\sart\.\s\s\s)(?<!\spoz\.\s)(?<!\spoz\.\s\s)(?<!\spoz\.\s\s\s)^((?:[\<§\[]*\s*)?\d{1,2}[a-zA-ZĄĆĘŁŃÓŚŹŻąćęłńóśźż⁰¹²³⁴⁵⁶⁷⁸⁹]{0,4}\.\s*(?=[A-ZĄĆĘŁŃÓŚŹŻ⁰¹²³⁴⁵⁶⁷⁸⁹⁾\(\[\<])[\s\S]*?)(?=(?<![-–])(?<!\sart\.\s\d\d\d\s)(?<!\sart\.\s\d\d\d\s\s)(?<!\sart\.\s\d\d\s)(?<!\sart\.\s\d\d\s\s)(?<!\sart\.\s\d\s)(?<!\sart\.\s\d\s\s)(?<!\salbo\s)(?<!\salbo\s\s)(?<!\salbo\s\s\s)(?<!\sstr\.\s)(?<!\sstr\.\s\s)(?<!\sstr\.\s\s\s)(?<!\slub\s)(?<!\slub\s\s)(?<!\si\s)(?<!\si\s\s)(?<!\si\s\s\s)(?<!\spkt\s)(?<!\spkt\s\s)(?<!\spkt\s\s\s)(?<!\sust\.\s)(?<!\sust\.\s\s)(?<!\sust\.\s\s\s)(?<!\sart\.\s)(?<!\sart\.\s\s)(?<!\sart\.\s\s\s)(?<!\spoz\.\s)(?<!\spoz\.\s\s)(?<!\spoz\.\s\s\s)^((?:[\<§\[]*\s*)?\d{1,2}[a-zA-ZĄĆĘŁŃÓŚŹŻąćęłńóśźż⁰¹²³⁴⁵⁶⁷⁸⁹]{0,4}\.\s*(?=[A-ZĄĆĘŁŃÓŚŹŻ⁰¹²³⁴⁵⁶⁷⁸⁹⁾\(\[\<]))|\Z)',
                 text,
                 flags=re.DOTALL | re.MULTILINE
             )
@@ -27,7 +28,7 @@ class SectionSplitter(AbstractDocumentSplitter[SectionSplit]):
     def split(self, art_split: ArticleSplit):
         prev_split = art_split.split_item_for_further_processing()
 
-        if art_split.id_unit == '72':
+        if art_split.id_unit == '16l':
             w = 4
 
         splits_of_upcoming_changes = self.split_by_upcoming_changes(prev_split)

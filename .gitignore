@@ -17,6 +17,7 @@ preprocessing/mongo_db/__pycache__/
 preprocessing/stages/__pycache__/
 preprocessing/stages/__pycache__/download_raw_rows_for_each_year.cpython-38.pyc
 preprocessing/utils/__pycache__/stage_def.cpython-38.pyc
+scraper/
 
 /dask/.idea
 *.pyc

@@ -77,6 +77,9 @@ class MongodbCollection:
             cursor = cursor.limit(limit)
         return list(cursor)
 
+    def aggregate(self, pipeline: List):
+        return self.collection.aggregate(pipeline)
+
 
 def get_mongodb_collection(db_name, collection_name):
     ## localhost
@@ -203,4 +206,68 @@ def get_mongodb_collection(db_name, collection_name):
                         unique=True)
                 ]
             )
+    if db_name == "preparing_dataset_for_embedding":
+        if collection_name == "question_with_annotations":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("nro", ASCENDING)],
+                        unique=True)
+                ]
+            )
+        elif collection_name == "creating_annotations_for_question_error":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("nro", ASCENDING), ("invoke_id", ASCENDING)],
+                        unique=True)
+                ]
+            )
+        elif collection_name == "documents_with_title_embedding":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("legal_act.ELI", ASCENDING), ("legal_act.invoke_id", ASCENDING)],
+                        unique=True)
+                ]
+            )
+    if db_name == "costs_of_runs":
+        if collection_name == "dataset_preparations_costs":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("name", ASCENDING), ("invoke_id", ASCENDING)],
+                        unique=True)
+                ]
+            )
+    if db_name == "scraping_lex":
+        if collection_name == "list_questions":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("nro", ASCENDING)],
+                        unique=True)
+                    ]
+            )
+        elif collection_name == "questions_with_html":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("nro", ASCENDING)],
+                        unique=True)
+                ]
+            )
+
     raise Exception("Invalid db_name or collection_name Mongodb error")

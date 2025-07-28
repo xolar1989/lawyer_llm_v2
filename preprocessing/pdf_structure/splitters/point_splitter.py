@@ -13,14 +13,15 @@ class PointSplitter(AbstractDocumentSplitter[PointSplit]):
         super().__init__()
 
     def before_upcoming_change_pattern(self):
-        return r"\[\s*\d+[a-zA-Z]?\)[^\[\]<>]*\]"
+        return r"\[\s*\d+[a-zA-ZĄĆĘŁŃÓŚŹŻąćęłńóśźż]?\)[^\[\]<>]*\]"
 
     def upcoming_change_pattern(self):
-        return r"<\s*\d+[a-zA-Z]?\)[^<>\[\]]*>"
+        return r"<\s*\d+[a-zA-ZĄĆĘŁŃÓŚŹŻąćęłńóśźż]?\)[^<>\[\]]*>"
 
+    ## TODO create the dynamic regex, for this
     def split_function(self, text):
         return re.finditer(
-            r'(?<![-–])(?<!\ss\.\s)(?<!\ss\.\s\s)(?<!\si\s)(?<!\si\s\s)(?<!\si\s\s\s)(?<!str\.\s)(?<!str\.\s\s)(?<!str\.\s\s\s)(?<!pkt\s)(?<!pkt\s\s)(?<!pkt\s\s\s)(?<!ust\.\s)(?<!ust\.\s\s)(?<!ust\.\s\s\s)(?<!art\.\s)(?<!art\.\s\s)(?<!art\.\s\s\s)(?<!poz\.\s)(?<!poz\.\s\s)(?<!poz\.\s\s\s)^((?:[\<§\[]*\s*)?\d+[a-zA-Z]*\)\s*[\s\S]*?)(?=(?<![-–])(?<!\ss\.\s)(?<!\ss\.\s\s)(?<!\si\s)(?<!\si\s\s)(?<!\si\s\s\s)(?<!str\.\s)(?<!str\.\s\s)(?<!str\.\s\s\s)(?<!pkt\s)(?<!pkt\s\s)(?<!pkt\s\s\s)(?<!ust\.\s)(?<!ust\.\s\s)(?<!ust\.\s\s\s)(?<!art\.\s)(?<!art\.\s\s)(?<!art\.\s\s\s)(?<!poz\.\s)(?<!poz\.\s\s)(?<!poz\.\s\s\s)^((?:[\<§\[]*\s*)?\d+[a-zA-Z]*\)\s*)(?!,)|\Z)',
+            r'(?<![-–])(?<!\ss\.\s)(?<!\ss\.\s\s)(?<!\si\s)(?<!\si\s\s)(?<!\si\s\s\s)(?<!str\.\s)(?<!str\.\s\s)(?<!str\.\s\s\s)(?<!pkt\s)(?<!pkt\s\s)(?<!pkt\s\s\s)(?<!ust\.\s)(?<!ust\.\s\s)(?<!ust\.\s\s\s)(?<!art\.\s)(?<!art\.\s\s)(?<!art\.\s\s\s)(?<!poz\.\s)(?<!poz\.\s\s)(?<!poz\.\s\s\s)^((?:[\<§\[]*\s*)?\d+[a-zA-ZĄĆĘŁŃÓŚŹŻąćęłńóśźż]*\)\s*[\s\S]*?)(?=(?<![-–])(?<!\ss\.\s)(?<!\ss\.\s\s)(?<!\si\s)(?<!\si\s\s)(?<!\si\s\s\s)(?<!str\.\s)(?<!str\.\s\s)(?<!str\.\s\s\s)(?<!pkt\s)(?<!pkt\s\s)(?<!pkt\s\s\s)(?<!ust\.\s)(?<!ust\.\s\s)(?<!ust\.\s\s\s)(?<!art\.\s)(?<!art\.\s\s)(?<!art\.\s\s\s)(?<!poz\.\s)(?<!poz\.\s\s)(?<!poz\.\s\s\s)^((?:[\<§\[]*\s*)?\d+[a-zA-ZĄĆĘŁŃÓŚŹŻąćęłńóśźż]*\)\s*)(?![,;])|\Z)',
             text,
             flags=re.DOTALL | re.MULTILINE
         )
@@ -48,7 +49,9 @@ class PointSplitter(AbstractDocumentSplitter[PointSplit]):
                     subpoint_of_art.append(PointSplit(subpoint_split))
 
             ## TODO check that kind of situation exists
+            ##  ADD logic for case: DU/1997/602 beacuse it fail with upcoming changes, it shouldn't raise error in this case
             if len(art_split.legal_units_indeed) > 0 and len(subpoint_of_art) > 0:
+                w = art_split.split_item_for_further_processing()
                 raise RuntimeError(f"It should be like that in Art: {art_split.id_unit}, "
                                    f"sections numbers: {[section.id_unit for section in art_split.legal_units_indeed]}"
                                    f"subpoints numbers: {[subpoint.id_unit for subpoint in subpoint_of_art]}")

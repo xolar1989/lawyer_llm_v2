@@ -19,7 +19,7 @@ class SectionSplit(LegalUnitSplit):
 
     @classmethod
     def _can_erase_number_pattern(cls):
-        return r"^(?:[§<[]?)\s*(\d+[a-zA-Z⁰¹²³⁴⁵⁶⁷⁸⁹]*)\s*\.\s*(?=[A-ZĄĆĘŁŃÓŚŹŻ⁰¹²³⁴⁵⁶⁷⁸⁹⁾]|\[|\()"
+        return r"^(?:[§<[]?)\s*(\d+[a-zA-ZĄĆĘŁŃÓŚŹŻąćęłńóśźż⁰¹²³⁴⁵⁶⁷⁸⁹]*)\s*\.\s*(?=[A-ZĄĆĘŁŃÓŚŹŻ⁰¹²³⁴⁵⁶⁷⁸⁹⁾]|\[|\()"
 
     def split_item_for_further_processing(self):
         match_of_identification = re.match(self._can_erase_number_pattern(), self.split.text)

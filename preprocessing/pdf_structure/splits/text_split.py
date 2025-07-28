@@ -70,7 +70,10 @@ class TextSplit(MongodbObject):
     def is_up_to_date(self):
         normalized_text = re.sub(r'[\s\n\r]+', '', self.text).strip()
         normalized_text = re.sub(r'[⁰¹²³⁴⁵⁶⁷⁸⁹]+\⁾\⁽?', '', normalized_text).strip()
-        return normalized_text not in ["(uchylony)", "(uchylona)", "(uchylone)", "(pominięte)", "(pominięty)", '(utraciłmoc)']
+        repealed_text = re.search(r"^\s*\(\s*zawierający[\s\S]*?[–-]\s*(uchylony|uchylone|uchylona|pominięte|pominięty|utracił moc)\s*\)\s*$", self.text)
+        # w = normalized_text not in ["(uchylony)", "(uchylona)", "(uchylone)", "(pominięte)", "(pominięty)", '(utraciłmoc)'] and not repealed_text
+        return normalized_text not in ["(uchylony)", "(uchylona)", "(uchylone)", "(pominięte)", "(pominięty)", '(utraciłmoc)'] and not repealed_text
+
 
     def build_text_split_from_indexes(self, left_index: int, right_index: int) -> 'TextSplit':
         chars: List[CharTextSplit] = []

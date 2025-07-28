@@ -3,8 +3,6 @@ import re
 from abc import ABC
 from typing import List, Mapping, Any
 
-from natsort import natsorted
-
 from preprocessing.mongo_db.mongodb import MongodbObject
 
 from preprocessing.pdf_structure.splits.text_split import TextSplit, StatusOfText
@@ -41,12 +39,12 @@ class LegalUnit(MongodbObject, ABC):
     @classmethod
     def from_dict(cls, dict_object: Mapping[str, Any]):
         if dict_object['type'] == "Article":
-            from article import Article
+            from preprocessing.pdf_structure.elements.article import Article
             return Article.from_dict(dict_object)
         elif dict_object['type'] == "Section":
-            from section import Section
+            from preprocessing.pdf_structure.elements.section import Section
             return Section.from_dict(dict_object)
         elif dict_object['type'] == "Subpoint":
-            from subpoint import Subpoint
+            from preprocessing.pdf_structure.elements.subpoint import Subpoint
             return Subpoint.from_dict(dict_object)
         return None

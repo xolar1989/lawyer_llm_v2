@@ -34,11 +34,15 @@ dependencies:
       - langchain==0.2.17
       - langchain-aws==0.1.4
       - langchain-openai==0.1.20
+      - langchain-community
+      - scikit-learn
       - numpy
       - pymongo
       - openai==1.37.1
       - prefect==3.4.6
       - griffe
+      - redis
+      - beautifulsoup4
       - prefect[dask]  # Install preprocessing[dask] using pip
       - aioboto3==12.4.0
       - aiobotocore==2.12.3
@@ -47,5 +51,4 @@ dependencies:
       - aioitertools
       - tqdm
       - python-dotenv
-      - natsort
 

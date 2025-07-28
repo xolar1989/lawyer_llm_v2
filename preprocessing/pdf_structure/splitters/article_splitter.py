@@ -8,17 +8,19 @@ from preprocessing.pdf_structure.splitters.abstract_document_splitter import Abs
 
 class ArticleSplitter(AbstractDocumentSplitter[ArticleSplit]):
 
+    ## TODO we could remove capital letters because in polish legal acts legal units don't have it
+
     def __init__(self):
         super().__init__()
 
     def before_upcoming_change_pattern(self):
-        return r"\[\s*Art\.\s*\d+[a-zA-Z]*\.[^\]\[\>]*\]"  # [Art. 1.]
+        return r"\[\s*Art\.\s*\d+[a-zA-ZĄĆĘŁŃÓŚŹŻąćęłńóśźż⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᶢʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻᵘⁿᵒʳᵐᴬᴮᶜᴰᴱᶠᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᵠᴿˢᵀᵁⱽᵂˣʸᶻᴸ]*\.[^\]\[\>]*\]"  # [Art. 1.]
 
     def upcoming_change_pattern(self):
-        return r"<\s*Art\.\s*\d+[a-zA-Z]*\.[^>\]\[]*>"  # <Art. 1.>
+        return r"<\s*Art\.\s*\d+[a-zA-ZĄĆĘŁŃÓŚŹŻąćęłńóśźż⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᶢʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻᵘⁿᵒʳᵐᴬᴮᶜᴰᴱᶠᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᵠᴿˢᵀᵁⱽᵂˣʸᶻᴸ]*\.[^>\]\[]*>"  # <Art. 1.>
 
     def split_function(self, text):
-        return re.finditer(r'(^Art[\.]*\s*\d+[a-zA-Z]*[\.][\s\S]*?)(?=^Art[\.]*\s*\d+[a-zA-Z]*[\.]|\Z)', text, flags=re.DOTALL | re.MULTILINE)
+        return re.finditer(r'(^Art[\.]*\s*\d+[a-zA-ZĄĆĘŁŃÓŚŹŻąćęłńóśźż⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᶢʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻᵘⁿᵒʳᵐᴬᴮᶜᴰᴱᶠᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᵠᴿˢᵀᵁⱽᵂˣʸᶻᴸ]*[\.][\s\S]*?)(?=^Art[\.]*\s*\d+[a-zA-ZĄĆĘŁŃÓŚŹŻąćęłńóśźż⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᶢʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻᵘⁿᵒʳᵐᴬᴮᶜᴰᴱᶠᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᵠᴿˢᵀᵁⱽᵂˣʸᶻᴸ]*[\.]|\Z)', text, flags=re.DOTALL | re.MULTILINE)
 
     def split(self, chapter_split: ChapterSplit):
         prev_split = chapter_split.split_item_for_further_processing()
@@ -48,6 +50,7 @@ class ArticleSplitter(AbstractDocumentSplitter[ArticleSplit]):
                 art_splits.append(ArticleSplit(art_split))
 
         filtered_art_splits = self.filter_splits(art_splits)
+
         chapter_split.articles = filtered_art_splits
         return filtered_art_splits
 
@@ -55,8 +58,10 @@ class ArticleSplitter(AbstractDocumentSplitter[ArticleSplit]):
         filtered_splits = []
         for article_split in article_splits:
             text_split = article_split.split_item_for_further_processing()
-
+            # TODO change this because now we handle case of [Art. 153a.]
+            # if text_split is not None:
             text_of_split = text_split.text.replace("\n", "")
+
             if not ('wprowadza się następujące zmiany' in text_of_split):
                 filtered_splits.append(article_split)
             else:
