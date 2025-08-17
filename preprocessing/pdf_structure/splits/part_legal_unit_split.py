@@ -31,7 +31,7 @@ class PartLegalUnitSplit(LegalUnitSplit):
         if self.is_hidden:
             return ""
 
-        title_search = re.search(r'(DZIAŁ\s+[IVXLCDMA-ZĄĆĘŁŃÓŚŹŻ⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᶢʰⁱʲᵏˡᵐⁿᵒᵖʳᑫˢᵗᵘᵛʷˣʸᶻᵘⁿᵒʳᵐᴬᴮᶜᴰᴱᶠᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᵠᴿˢᵀᵁⱽᵂˣʸᶻᴸ]+)\s*\s*((?:.+\n)*?)^\s*(?=Rozdział|Art\.)', self.split.text,
+        title_search = re.search(r'(DZIAŁ\s+[IVXLCDMA-ZĄĆĘŁŃÓŚŹŻ⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᶢʰⁱʲᵏˡᵐⁿᵒᵖʳᑫˢᵗᵘᵛʷˣʸᶻᵘⁿᵒʳᵐᴬᴮᶜᴰᴱᶠᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᵠᴿˢᵀᵁⱽᵂˣʸᶻᴸ]+)\s*\s*((?:.+\n)*?)^\s*(?=Rozdział|Art\.|\(.+uchylone\))', self.split.text,
                                  flags=re.MULTILINE)
 
         if title_search is None:

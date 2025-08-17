@@ -20,6 +20,8 @@ class ChapterSplitter(AbstractDocumentSplitter):
             text)
 
     def split(self, part_unit_split: PartLegalUnitSplit):
+        if part_unit_split.id_unit == "TRZYNASTY":
+            e = 4
         chapter_splits: List[ChapterSplit] = []
         text_split = part_unit_split.split_item_for_further_processing()
         for part_match in self.split_function(text_split.text):
@@ -32,8 +34,10 @@ class ChapterSplitter(AbstractDocumentSplitter):
             )
             )
 
+
             chapter_splits.append(chapter_split)
         filtered_chapter_splits = self.filter_splits(chapter_splits)
+        ## TODO it need be corrected for dział trzynasty DU/1974/141
         if len(filtered_chapter_splits) == 0:
             chapter_split = ChapterSplit(part_unit_split.split, is_hidden=True)
             filtered_chapter_splits.append(chapter_split)
@@ -41,9 +45,13 @@ class ChapterSplitter(AbstractDocumentSplitter):
         return filtered_chapter_splits
 
     def filter_splits(self, chapters_splits: List[ChapterSplit]) -> List[ChapterSplit]:
+
+        ## TODO it need be corrected for dział trzynasty DU/1974/141
         filtered_splits = []
         for chapter_split in chapters_splits:
             chapter_title = chapter_split.title.replace("\n", "")
+            if not chapter_split.split_item_for_further_processing().is_up_to_date():
+                continue
             if not ("Zmiany w przepisach" in chapter_title.strip() or
                     'przepisy zmieniajace' in self.normalize(chapter_title) or
                     'zmiany w przepisach' in self.normalize(chapter_title) or

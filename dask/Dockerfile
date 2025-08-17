@@ -28,10 +28,12 @@ RUN pip install -r /app/requirements.txt
 
 
 COPY ./preprocessing /dask/preprocessing
+COPY ./model /dask/model
 
 
 # Add the directory to the Python path so Dask workers can import it
-ENV PYTHONPATH="/dask/preprocessing:${PYTHONPATH}"
+#ENV PYTHONPATH="/dask/preprocessing:${PYTHONPATH}"
+ENV PYTHONPATH="/dask/preprocessing:/dask/model:${PYTHONPATH}"
 ENV DASK_DATAFRAME__CONVERT_STRING=False
 
 

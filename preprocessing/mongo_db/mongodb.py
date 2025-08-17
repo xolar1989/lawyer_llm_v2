@@ -80,6 +80,9 @@ class MongodbCollection:
     def aggregate(self, pipeline: List):
         return self.collection.aggregate(pipeline)
 
+    def find(self, filter: Mapping[str, Any], *args):
+        return self.collection.find(filter, *args)
+
 
 def get_mongodb_collection(db_name, collection_name):
     ## localhost
@@ -206,14 +209,95 @@ def get_mongodb_collection(db_name, collection_name):
                         unique=True)
                 ]
             )
+        elif collection_name == "question_with_annotation_chunks":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("nro", ASCENDING), ("invoke_id", ASCENDING)],
+                        unique=True)
+                ]
+            )
+    if db_name == "chunks":
+        if collection_name == "article_span_chunks":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("unit_id", ASCENDING), ("ELI", ASCENDING), ("invoke_id", ASCENDING)],
+                        unique=True)
+                ]
+            )
+        elif collection_name == "article_chunks":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("unit_id", ASCENDING), ("ELI", ASCENDING), ("invoke_id", ASCENDING)],
+                        unique=True)
+                ]
+            )
+        elif collection_name == "section_chunks":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("article_id", ASCENDING), ("section_id", ASCENDING), ("ELI", ASCENDING), ("invoke_id", ASCENDING)],
+                        unique=True)
+                ]
+            )
+        elif collection_name == "subpoint_chunks":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("article_id", ASCENDING), ("section_id", ASCENDING), ("ELI", ASCENDING), ("subpoint_id", ASCENDING), ("invoke_id", ASCENDING)],
+                        unique=True)
+                ]
+            )
+        elif collection_name == "errors_2":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("ELI", ASCENDING), ("invoke_id", ASCENDING)],
+                        unique=True)
+                ]
+            )
     if db_name == "preparing_dataset_for_embedding":
-        if collection_name == "question_with_annotations":
+        if collection_name == "rephrased_question":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("nro", ASCENDING), ("invoke_id", ASCENDING)],
+                        unique=True)
+                ]
+            )
+        elif collection_name == "question_with_annotations":
             return MongodbCollection(
                 collection_name=collection_name,
                 db_instance=mongo_db,
                 indexes=[
                     MongodbCollectionIndex(
                         [("nro", ASCENDING)],
+                        unique=True)
+                ]
+            )
+        elif collection_name == "attaching_chunks_error":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("nro", ASCENDING), ("invoke_id", ASCENDING)],
                         unique=True)
                 ]
             )
@@ -227,6 +311,17 @@ def get_mongodb_collection(db_name, collection_name):
                         unique=True)
                 ]
             )
+        elif collection_name == "rephrasing_error":
+            return MongodbCollection(
+                collection_name=collection_name,
+                db_instance=mongo_db,
+                indexes=[
+                    MongodbCollectionIndex(
+                        [("nro", ASCENDING), ("invoke_id", ASCENDING)],
+                        unique=True)
+                ]
+            )
+
         elif collection_name == "documents_with_title_embedding":
             return MongodbCollection(
                 collection_name=collection_name,
@@ -248,7 +343,7 @@ def get_mongodb_collection(db_name, collection_name):
                         unique=True)
                 ]
             )
-    if db_name == "scraping_lex":
+    if db_name == "collections_html":
         if collection_name == "list_questions":
             return MongodbCollection(
                 collection_name=collection_name,

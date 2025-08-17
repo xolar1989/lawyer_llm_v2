@@ -132,13 +132,22 @@ class RetrieveAnnotationsOfLegalUnitsFromQA(FlowStep):
     @classmethod
     @FlowStep.step(task_run_name='retrieve_annotations_of_legal_units')
     def run(cls, flow_information: dict, dask_client: Client, workers_count: int):
-
+        nro = 622884010
         invoke_id = "72f213ee-7227-4e99-96f0-63a5766ed1d8"
         df = pd.DataFrame(
             list(get_mongodb_collection(
-                db_name="scraping_lex",
+                db_name="collections_html",
                 collection_name="questions_with_html"
             ).find_many({}, {"_id": 0}))
+        )
+
+        www = cls.worker_task(
+            question_with_html=QuestionWithHtml.from_dict(get_mongodb_collection(
+                db_name="collections_html",
+                collection_name="questions_with_html"
+            ).find_one({"nro":622884010}, {"_id": 0})),
+            invoke_id=invoke_id,
+
         )
 
 
@@ -150,13 +159,20 @@ class RetrieveAnnotationsOfLegalUnitsFromQA(FlowStep):
             ).find_many({}, {"nro": 1, "_id": 0})
         )
 
+        error_nro_set = set(
+            doc["nro"] for doc in get_mongodb_collection(
+                db_name="preparing_dataset_for_embedding",
+                collection_name="creating_annotations_for_question_error"
+            ).find_many({"type": {"$ne": "RateLimitError"}}, {"nro": 1, "_id": 0})
+        )
+
 
         ddf_eli_documents = dd.from_pandas(df, npartitions=workers_count)
 
 
-        ddf_filtered = ddf_eli_documents[~ddf_eli_documents["nro"].isin(existing_nro_set)]
+        ddf_filtered = ddf_eli_documents[~ddf_eli_documents["nro"].isin(existing_nro_set.union(error_nro_set))]
 
-        # w = ddf_filtered.compute()
+        w = ddf_filtered.compute()
         # selected_ddf = ddf_eli_documents[
         #     ddf_eli_documents["nro"] == 622784302].compute()
         # r = cls.worker_task(question_with_html=QuestionWithHtml.from_dict(selected_ddf.iloc[0].to_dict()), invoke_id=invoke_id)

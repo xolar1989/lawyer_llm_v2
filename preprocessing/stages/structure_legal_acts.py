@@ -151,6 +151,9 @@ class StructureLegalActs(FlowStep):
     @classmethod
     @retry_dask_task(retries=3, delay=10)
     def worker_task(cls, row: Dict[str, str]):
+        # TODO add logic to check that article section and point have uniq ids
+
+        ## TODO add difference of bolded text https://api.sejm.gov.pl/eli/acts/DU/2001/1371/text/U/D20011371Lj.pdf
         try:
             rows = get_mongodb_collection(
                 db_name="preprocessing_legal_acts_texts",

@@ -60,6 +60,9 @@ class LegalUnitAnnotationFactory:
         return cast(List[Article], self._get_legal_part_unit(self.legal_act_document.articles, unit_ids))
 
     def get_legal_part_section(self, article: Article, section_unit_ids: List[str]) -> List[Section]:
+        for legal_unit in article.legal_units_indeed:
+            if not isinstance(legal_unit, Section):
+                raise ValueError(f"art {article.unit_id} - {legal_unit.unit_id} should be Section but is point")
         return cast(List[Section], self._get_legal_part_unit(article.legal_units_indeed, section_unit_ids))
 
     def get_legal_part_subpoints(self, parent_legal_unit: Article | Section, subpoints_unit_ids: List[str],
@@ -68,6 +71,9 @@ class LegalUnitAnnotationFactory:
         if isinstance(parent_legal_unit, Section):
             return cast(List[Subpoint], self._get_legal_part_unit(parent_legal_unit.subpoints, subpoints_unit_ids))
         if isinstance(parent_legal_unit, Article):
+            for child_unit in parent_legal_unit.legal_units_indeed:
+                if isinstance(child_unit, Section):
+                    raise ValueError(f"art {parent_legal_unit.unit_id} - {child_unit.unit_id} should be Point but it is Section")
             return cast(List[Subpoint],
                         self._get_legal_part_unit(parent_legal_unit.legal_units_indeed, subpoints_unit_ids))
         raise InvalidStateOfReference(f"""

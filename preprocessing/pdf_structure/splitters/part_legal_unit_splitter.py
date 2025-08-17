@@ -47,6 +47,9 @@ class PartLegalUnitSplitter(AbstractDocumentSplitter[PartLegalUnitSplit]):
     def filter_splits(self, splits: List[PartLegalUnitSplit]) -> List[PartLegalUnitSplit]:
         filtered_splits = []
         for part_legal_unit_split in splits:
+            r = part_legal_unit_split.split_item_for_further_processing()
+
+            www = repealed_text = re.search(r"^\s*\(\s*zawierający[\s\S]*?[–-]\s*(uchylony|uchylone|uchylona|pominięte|pominięty|utracił moc)\s*\)\s*$", part_legal_unit_split.split_item_for_further_processing().text)
             if part_legal_unit_split.split_item_for_further_processing().is_up_to_date():
                 filtered_splits.append(part_legal_unit_split)
             else:

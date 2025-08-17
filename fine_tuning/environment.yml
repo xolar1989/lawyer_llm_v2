@@ -1,0 +1,26 @@
+name: pytorch_test_emb
+channels:
+  - nvidia          # gives the pytorch-cuda metapackage
+  - pytorch
+  - conda-forge
+  - defaults
+channel_priority: strict
+dependencies:
+  # ───────── core ─────────
+  - python=3.10
+  - pytorch=2.1.2
+  - torchvision=0.16.2
+  - torchaudio=2.1.2
+  - pytorch-cuda=11.8         # pulls cudatoolkit-11.8 and sets env-vars
+  # ───────── NLP stack ─────
+  - transformers=4.41.2
+  - accelerate=0.31.0
+  - sentence-transformers=3.0.0
+  - datasets=2.18.0
+  - numpy<2                  # <- pin NumPy 1.x to match PyTorch
+    # Anything conda can’t provide → install with pip
+  - pip
+  - pip:
+    # pre-built Linux wheel that matches cu118
+      - flash-attn==2.5.6
+      - tokenizers>=0.19,<0.20

@@ -78,7 +78,7 @@ def preprocessing_api():
     #
     #
     dask_cluster = CreateLocalDaskCluster.run(
-        num_workers=5
+        num_workers=3
     )
     R = 4
     ## TODO when we start flow define if stack name already exist, omit creation of stack

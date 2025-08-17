@@ -20,15 +20,17 @@ class LegalUnit(MongodbObject, ABC):
         return normalized_text not in ["(uchylony)", "(uchylona)", "(uchylone)", "(pominięte)", "(pominięty)", '(utraciłmoc)']
 
     @staticmethod
+    def extract_main_number(unit_id: str):
+        match = re.match(r'^(\d+)', unit_id)
+        return int(match.group(1)) if match else float('inf')
+
+    @staticmethod
     def is_ascending(legal_units_splits: List['LegalUnit']):
         ids = [unit.unit_id for unit in legal_units_splits]
 
-        def extract_main_number(unit_id: str):
-            match = re.match(r'^(\d+)', unit_id)
-            return int(match.group(1)) if match else float('inf')
 
         # Build list of main numbers, preserving order
-        main_numbers_in_order = [extract_main_number(id_) for id_ in ids]
+        main_numbers_in_order = [LegalUnit.extract_main_number(id_) for id_ in ids]
 
         return main_numbers_in_order == sorted(main_numbers_in_order.copy())
 

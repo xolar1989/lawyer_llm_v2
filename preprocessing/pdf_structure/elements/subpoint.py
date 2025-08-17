@@ -11,9 +11,10 @@ class Subpoint(LegalUnit):
 
     @classmethod
     def build(cls, point_split: PointSplit):
+        subpoint_text = cls.get_current_text(point_split.split_item_for_further_processing())
         return Subpoint(
             unit_id=point_split.id_unit,
-            text=cls.get_current_text(point_split.split)
+            text=subpoint_text
         )
 
     def to_dict(self):

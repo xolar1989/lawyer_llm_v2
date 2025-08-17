@@ -22,9 +22,13 @@ from preprocessing.qustions_and_answers_objects.legal_unit_annotations_llm_retri
 from preprocessing.qustions_and_answers_objects.legal_units_retriever import LegalUnitsRetriever
 from preprocessing.qustions_and_answers_objects.llm_legal_annotations import LegalReferenceList
 from preprocessing.qustions_and_answers_objects.question_with_html import QuestionWithHtml
+from preprocessing.stages.attach_chunks_for_annotation_to_qa import AttachChunksForAnnotationToQA
+from preprocessing.stages.build_chunks_from_legal_acts import BuildChunksFromLegalActs
 from preprocessing.stages.create_dask_cluster import CreateRemoteDaskCluster
 from preprocessing.stages.create_local_dask_cluster import CreateLocalDaskCluster
+from preprocessing.stages.explode_question_to_question_chunk_pair import ExplodeQuestionToQuestionChunkPair
 from preprocessing.stages.get_existing_dask_cluster import GetExistingDaskCluster
+from preprocessing.stages.rephrase_to_legal_query_question import RephraseToLegalQueryQuestion
 from preprocessing.stages.retrieve_annotations_of_legal_units_from_qa import RetrieveAnnotationsOfLegalUnitsFromQA
 from preprocessing.stages.start_dag import StartDag
 from dask.distributed import Client
@@ -61,38 +65,72 @@ def preparing_dataset():
     CLUSTER_NAME = f'Fargate-Dask-Cluster-{flow_run.name}'
     WORKERS_SERVICE = "Dask-Workers"
 
-    dask_cluster = GetExistingDaskCluster.run(stack_name="dask-stack-216d65cb-5048-4c57-ab25-b51a4f49d17d")
-
-    # dask_cluster = CreateLocalDaskCluster.run(
-    #     num_workers=4
-    # )
-    # dask_cluster = CreateRemoteDaskCluster.run(
-    #     stack_name=STACK_NAME,
-    #     cluster_name=CLUSTER_NAME,
-    #     workers_service_name=WORKERS_SERVICE,
-    #     flow_run_id=flow_run.id,
-    #     flow_run_name=flow_run.name,
-    #     cluster_props={
-    #         "EnableScaling": "false",
-    #         "MemoryCapacity": "8192",
-    #         "CpuCapacity": '4096'
-    #     }
-    # )
+    # dask_cluster = GetExistingDaskCluster.run(stack_name="dask-stack-2e234e06-5e39-449c-8d3f-8f0fe88178ee")
     #
-    # dask_cluster = UpdateDaskClusterWorkers.run(
-    #     dask_cluster=dask_cluster,
-    #     desired_count=20
+    # dask_cluster = CreateLocalDaskCluster.run(
+    #     num_workers=5
     # )
+    dask_cluster = CreateRemoteDaskCluster.run(
+        stack_name=STACK_NAME,
+        cluster_name=CLUSTER_NAME,
+        workers_service_name=WORKERS_SERVICE,
+        flow_run_id=flow_run.id,
+        flow_run_name=flow_run.name,
+        cluster_props={
+            "EnableScaling": "false",
+            "MemoryCapacity": "8192",
+            "CpuCapacity": '4096'
+        }
+    )
+
+    dask_cluster = UpdateDaskClusterWorkers.run(
+        dask_cluster=dask_cluster,
+        desired_count=20
+    )
 
     dask_workers_count = dask_cluster.get_workers_count()
 
     client = Client(dask_cluster.get_cluster_url())
 
-    path_to_parquet_legal_annotation_success_first_run, path_to_parquet_legal_annotation_failed_first_run = \
-        RetrieveAnnotationsOfLegalUnitsFromQA.run(
-            flow_information=flow_information, dask_client=client, workers_count=dask_cluster.get_workers_count()
-        )
 
+
+
+
+
+    # path_to_parquet_chunks_success_first_run, path_to_parquet_chunks_failed_first_run = BuildChunksFromLegalActs.run(
+    #     flow_information=flow_information, dask_client=client, workers_count=dask_cluster.get_workers_count(),
+    #     model_id="sdadas/mmlw-retrieval-roberta-large-v2"
+    # )
+
+
+    w = 4
+
+
+    # path_to_parquet_legal_annotation_success_first_run, path_to_parquet_legal_annotation_failed_first_run = \
+    #     RetrieveAnnotationsOfLegalUnitsFromQA.run(
+    #         flow_information=flow_information, dask_client=client, workers_count=dask_cluster.get_workers_count()
+    #     )
+
+    t = 4
+    # path_to_parquet_rephrase_success_first_run, path_to_parquet_rephrase_failed_first_run = RephraseToLegalQueryQuestion.run(
+    #     flow_information=flow_information, dask_client=client, workers_count=dask_cluster.get_workers_count(),
+    #     model_id="sdadas/mmlw-retrieval-roberta-large-v2"
+    # )
+
+    t = 4
+    # # # TODO it should be link parquet from RetrieveAnnotationsOfLegalUnitsFromQA with nro and invoke_id
+    path_to_parquet_link_chunks_success_first_run, path_to_parquet_link_chunks_failed_first_run = AttachChunksForAnnotationToQA.run(
+        flow_information=flow_information, dask_client=client, workers_count=dask_cluster.get_workers_count(),
+        model_id="sdadas/mmlw-retrieval-roberta-large-v2"
+    )
+
+
+    invoke_id = "72f213ee-7227-4e99-96f0-63a5766ed1d8"
+    exploaded_df_path = ExplodeQuestionToQuestionChunkPair.run(flow_information=flow_information, invoke_id=invoke_id, dask_client=client, workers_count=dask_cluster.get_workers_count())
+
+    ttttt = 's3://datalake-bucket-123/stages/$172aa988-a90d-4990-a986-bf175190c578/ExplodeQuestionToQuestionChunkPair/results.parquet.gzip'
+
+    final_result = 's3://datalake-bucket-123/stages/$4b7047db-ab3c-4fca-811c-78069268dcae/ExplodeQuestionToQuestionChunkPair/results.parquet.gzip'
     w= 4
 
 
@@ -100,6 +138,8 @@ if __name__ == "__main__":
     ## Mean average precision
     ## Mean reciprocal rank
     ## Recall @k
+
+
 
     try:
         ## TODO JUST FOCUS ON THIS
@@ -120,7 +160,7 @@ if __name__ == "__main__":
 
     invoke_id = "72f213ee-7227-4e99-96f0-63a5766ed1d8"
     rows = list(get_mongodb_collection(
-        db_name="scraping_lex",
+        db_name="collections_html",
         collection_name="questions_with_html"
     ).find_many({},
         {"_id": 0}))
@@ -130,7 +170,7 @@ if __name__ == "__main__":
     w = df.to_dict(orient='records')
 
     question_with_html = QuestionWithHtml.from_dict(get_mongodb_collection(
-        db_name="scraping_lex",
+        db_name="collections_html",
         collection_name="questions_with_html"
     ).find_one(
         {
