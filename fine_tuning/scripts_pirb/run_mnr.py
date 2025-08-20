@@ -45,6 +45,9 @@ class ScriptArguments:
     model_id: str = field(
         default=None, metadata={"help": "Model ID to use for Embedding training"}
     )
+    eval_only: bool = field(
+        default=False, metadata={"help": "If True, skip training and run only evaluation"}
+    )
     chunking_type: str = field(
         default=None, metadata={"help": "Type of chunking"}
     )
@@ -69,6 +72,7 @@ def build_gold_evaluator(
         test_ds,
         mode: str = "gold_unit_article_chunking",  # or "gold_article_only"
 ):
+    ## TODO add all chunks from legal acts to corpus
     """
     Parameters
     ----------
@@ -265,6 +269,25 @@ def training_function(script_args):
     evaluator = create_evaluator(
         train_dataset, test_dataset, script_args.chunking_type
     )
+
+    if script_args.eval_only:
+        # only evaluation
+        res = evaluator(model)  # writes results.json too
+        # Be robust across ST versions:
+        print(res)
+        if isinstance(res, tuple):
+            main_score, metrics = res
+        elif isinstance(res, dict):
+            main_score, metrics = None, res
+        else:  # float or something else
+            main_score, metrics = res, {}
+        print("== EVAL RESULTS ==")
+        if metrics:
+            for k, v in sorted(metrics.items()):
+                print(f"{k}: {v}")
+        else:
+            print("main_score:", main_score)
+        return
 
     ###################
     # Loss Function
