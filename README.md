@@ -5,7 +5,8 @@
 # 📂 **Current code DAG for creating question annotation, linking Q&A with relevant legal units, chunking is located in**: `preprocessing_legal_questions_flow.py`
 
 # 📂 **Current code for training embeddings models is located in**: `fine_tuning` folder
-# training happend in main_training_important.ipynb and for zero-shot not fine-tuned evaluation in only_evaluation.ipynb
+# 💡 Training embeddings models in `main_training_important.ipynb` 
+# 💡 Evaluation for zero-shot not fine-tuned in `only_evaluation.ipynb`
 
 
 ## Prerequisites 
